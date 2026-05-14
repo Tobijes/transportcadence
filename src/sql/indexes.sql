@@ -1,0 +1,10 @@
+CREATE INDEX idx_stops_name ON stops(stop_name);
+CREATE INDEX idx_stop_times_stop_id ON stop_times(stop_id);
+CREATE INDEX idx_stop_times_stop_trip_seq ON stop_times(stop_id, trip_id, stop_sequence, departure_time);
+CREATE INDEX idx_stop_times_trip_id ON stop_times(trip_id);
+CREATE INDEX idx_trips_route_id ON trips(route_id);
+CREATE INDEX idx_trips_service_id ON trips(service_id);
+CREATE INDEX idx_transfers_from ON transfers(from_stop_id);
+CREATE INDEX idx_transfers_to ON transfers(to_stop_id);
+CREATE INDEX idx_calendar_dates_service ON calendar_dates(service_id, date);
+CREATE INDEX idx_stop_times_trip_seq_stop ON stop_times(trip_id, stop_sequence, stop_id);
