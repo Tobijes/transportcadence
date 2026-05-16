@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Check, ChevronsUpDown } from "lucide-react";
+import { Check, ChevronsUpDown, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -31,18 +31,26 @@ export function StopSelector({ label, value, onChange }: StopSelectorProps) {
   const [search, setSearch] = React.useState("");
   const [highlighted, setHighlighted] = React.useState("");
   const [results, setResults] = React.useState<string[]>([]);
+  const [loading, setLoading] = React.useState(false);
 
   React.useEffect(() => {
     if (!open) return;
     const trimmed = search.trim();
+    setLoading(true);
     const controller = new AbortController();
-    searchStops(trimmed).then((names) => {
-      if (!controller.signal.aborted) {
-        setHighlighted(trimmed);
-        setResults(names);
-      }
-    });
-    return () => controller.abort();
+    const timer = setTimeout(() => {
+      searchStops(trimmed).then((names) => {
+        if (!controller.signal.aborted) {
+          setHighlighted(trimmed);
+          setResults(names);
+          setLoading(false);
+        }
+      });
+    }, 250);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [search, open]);
 
   return (
@@ -71,7 +79,11 @@ export function StopSelector({ label, value, onChange }: StopSelectorProps) {
             />
           </div>
           <div className="max-h-64 overflow-y-auto">
-            {results.length === 0 ? (
+            {loading ? (
+              <div className="flex justify-center py-6">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              </div>
+            ) : results.length === 0 ? (
               <p className="py-6 text-center text-sm text-muted-foreground">Intet fundet.</p>
             ) : (
               results.map((name) => (
