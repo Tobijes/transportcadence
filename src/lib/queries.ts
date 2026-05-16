@@ -71,18 +71,6 @@ export function queryCadence(stopIdsA: string[], stopIdsB: string[]): CadenceRes
   const svcIdList = [...serviceIds];
   const ph = makePlaceholders(svcIdList.length);
 
-  // Per-service-per-weekday date counts (for trip count weighting)
-  const dateCountRows = db.prepare(
-    `SELECT service_id, weekday, COUNT(*) as date_count FROM service_dates WHERE service_id IN (${ph}) GROUP BY service_id, weekday`
-  ).all(...svcIdList) as { service_id: number; weekday: number; date_count: number }[];
-
-  const svcWdCount = new Map<number, Map<number, number>>();
-  for (const r of dateCountRows) {
-    if (!svcWdCount.has(r.service_id)) svcWdCount.set(r.service_id, new Map());
-    svcWdCount.get(r.service_id)!.set(r.weekday, r.date_count);
-  }
-
-  // Full date list per service per weekday (for headway computation)
   const serviceDateRows = db.prepare(
     `SELECT service_id, weekday, date FROM service_dates WHERE service_id IN (${ph})`
   ).all(...svcIdList) as { service_id: number; weekday: number; date: string }[];
@@ -93,6 +81,13 @@ export function queryCadence(stopIdsA: string[], stopIdsB: string[]): CadenceRes
     const byWd = serviceDateMap.get(r.service_id)!;
     if (!byWd.has(r.weekday)) byWd.set(r.weekday, []);
     byWd.get(r.weekday)!.push(r.date);
+  }
+
+  const svcWdCount = new Map<number, Map<number, number>>();
+  for (const [svcId, byWd] of serviceDateMap) {
+    const countMap = new Map<number, number>();
+    for (const [wd, dates] of byWd) countMap.set(wd, dates.length);
+    svcWdCount.set(svcId, countMap);
   }
   log(`service_dates loaded`);
 
@@ -139,12 +134,19 @@ export function queryCadence(stopIdsA: string[], stopIdsB: string[]): CadenceRes
   // Distinct active dates per (weekday, mode) — used as the averaging denominator
   const totalDatesCount: Record<number, Partial<Record<ModeKey, number>>> = {};
   for (const [mode, sids] of modeServiceIds) {
-    const rows = db.prepare(
-      `SELECT weekday, COUNT(DISTINCT date) as date_count FROM service_dates WHERE service_id IN (${makePlaceholders(sids.size)}) GROUP BY weekday`
-    ).all(...sids) as { weekday: number; date_count: number }[];
-    for (const r of rows) {
-      if (!totalDatesCount[r.weekday]) totalDatesCount[r.weekday] = {};
-      totalDatesCount[r.weekday]![mode] = r.date_count;
+    const datesByWd = new Map<number, Set<string>>();
+    for (const sid of sids) {
+      const byWd = serviceDateMap.get(sid);
+      if (!byWd) continue;
+      for (const [wd, dates] of byWd) {
+        if (!datesByWd.has(wd)) datesByWd.set(wd, new Set());
+        const s = datesByWd.get(wd)!;
+        for (const d of dates) s.add(d);
+      }
+    }
+    for (const [wd, dateSet] of datesByWd) {
+      if (!totalDatesCount[wd]) totalDatesCount[wd] = {};
+      totalDatesCount[wd]![mode] = dateSet.size;
     }
   }
 
