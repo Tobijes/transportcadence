@@ -3,7 +3,6 @@
 import {
   ComposedChart,
   Bar,
-  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -28,8 +27,11 @@ export function WeekdayChart({ day, data }: WeekdayChartProps) {
   const domainMax = Math.ceil(maxTrips / 5) * 5 || 5;
   const tickInterval = domainMax < 10 ? 1 : domainMax < 30 ? 2 : 5;
   const leftTicks = Array.from({ length: Math.floor(domainMax / tickInterval) + 1 }, (_, i) => i * tickInterval);
-  const avgTripsPerHour = totalsPerHour.reduce((a, b) => a + b, 0) / 24;
-  const showHeadway = avgTripsPerHour > 2;
+  const showHeadway = data.some((b) => b.medianHeadway !== null);
+  const maxHeadway = Math.max(...data.map((b) => b.medianHeadway ?? 0), 0);
+  const rightIntervals = leftTicks.length - 1;
+  const rightDomainMax = Math.ceil(maxHeadway / rightIntervals) * rightIntervals || rightIntervals;
+  const rightTicks = Array.from({ length: leftTicks.length }, (_, i) => Math.round((rightDomainMax / rightIntervals) * i));
 
   return (
     <div className="rounded-lg border bg-card p-4">
@@ -84,6 +86,9 @@ export function WeekdayChart({ day, data }: WeekdayChartProps) {
                 axisLine={false}
                 tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }}
                 allowDecimals={false}
+                domain={[0, rightDomainMax]}
+                ticks={rightTicks}
+                interval={0}
                 width={30}
               />
             )}
@@ -95,6 +100,7 @@ export function WeekdayChart({ day, data }: WeekdayChartProps) {
                 fill={MODE_CONFIG[key].color}
                 yAxisId="left"
                 isAnimationActive={false}
+                barSize={20}
               >
                 {idx === MODE_KEYS.length - 1 && (
                   <LabelList
@@ -122,16 +128,13 @@ export function WeekdayChart({ day, data }: WeekdayChartProps) {
               </Bar>
             ))}
             {showHeadway && (
-              <Line
+              <Bar
                 yAxisId="right"
-                type="linear"
                 dataKey="medianHeadway"
+                fill="hsl(var(--foreground))"
+                opacity={0.3}
                 isAnimationActive={false}
-                stroke="hsl(var(--foreground))"
-                
-                strokeWidth={1}
-                dot={{ r: 2, fill: "hsl(var(--foreground))", strokeWidth: 0 }}
-                connectNulls={false}
+                barSize={10}
               />
             )}
           </ComposedChart>
