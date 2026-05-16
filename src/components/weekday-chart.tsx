@@ -25,7 +25,7 @@ export function WeekdayChart({ day, data }: WeekdayChartProps) {
   const totalsPerHour = data.map((b) => MODE_KEYS.reduce((sum, k) => sum + b[k], 0));
   const maxTrips = Math.max(...totalsPerHour, 0);
   const domainMax = Math.ceil(maxTrips / 5) * 5 || 5;
-  const tickInterval = domainMax < 10 ? 1 : domainMax < 30 ? 2 : 5;
+  const tickInterval = domainMax < 10 ? 1 : domainMax < 20 ? 2 : domainMax < 45 ? 5: 10;
   const leftTicks = Array.from({ length: Math.floor(domainMax / tickInterval) + 1 }, (_, i) => i * tickInterval);
   const showHeadway = data.some((b) => b.medianHeadway !== null);
   const maxHeadway = Math.max(...data.map((b) => b.medianHeadway ?? 0), 0);
@@ -101,6 +101,7 @@ export function WeekdayChart({ day, data }: WeekdayChartProps) {
                 yAxisId="left"
                 isAnimationActive={false}
                 barSize={20}
+                radius={[5, 5, 0, 0]}
               >
                 {idx === MODE_KEYS.length - 1 && (
                   <LabelList
@@ -135,6 +136,7 @@ export function WeekdayChart({ day, data }: WeekdayChartProps) {
                 opacity={0.3}
                 isAnimationActive={false}
                 barSize={10}
+                radius={[3, 3, 0, 0]}
               />
             )}
           </ComposedChart>

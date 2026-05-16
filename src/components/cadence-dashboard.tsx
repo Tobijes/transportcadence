@@ -4,8 +4,10 @@ import * as React from "react";
 import { StopSelector } from "@/components/stop-selector";
 import { WeekdayChart } from "@/components/weekday-chart";
 import { ChartLegend } from "@/components/chart-legend";
-import { Loader2 } from "lucide-react";
+import { ArrowLeftRight, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { queryTripCadence } from "@/app/actions/query-trips";
+import { addRecentStop } from "@/lib/recent-stops";
 import type { CadenceResult, Weekday } from "@/lib/types";
 
 const WEEKDAY_NAMES: Record<Weekday, string> = {
@@ -49,10 +51,28 @@ export function CadenceDashboard() {
     return () => { cancelled = true; };
   }, [stopA, stopB]);
 
+  function handleSwap() {
+    const prevA = stopA;
+    const prevB = stopB;
+    setStopA(prevB);
+    setStopB(prevA);
+    addRecentStop("fra", prevB);
+    addRecentStop("til", prevA);
+  }
+
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-end gap-4">
         <StopSelector label="Fra" value={stopA} onChange={setStopA} storageKey="fra" />
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={handleSwap}
+          disabled={!stopA || !stopB}
+          className="self-end mb-0.5"
+        >
+          <ArrowLeftRight className="h-4 w-4" />
+        </Button>
         <StopSelector label="Til" value={stopB} onChange={setStopB} storageKey="til" />
         {loading && <Loader2 className="h-5 w-5 animate-spin text-muted-foreground self-end mb-2" />}
       </div>
