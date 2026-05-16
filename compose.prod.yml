@@ -7,7 +7,7 @@ services:
       - ./dataset:/app/dataset
     restart: always
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/api/healthz"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:80/api/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
