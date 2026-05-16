@@ -25,7 +25,7 @@ export function WeekdayChart({ day, data }: WeekdayChartProps) {
   const totalsPerHour = data.map((b) => MODE_KEYS.reduce((sum, k) => sum + b[k], 0));
   const maxTrips = Math.max(...totalsPerHour, 0);
   const domainMax = Math.ceil(maxTrips / 5) * 5 || 5;
-  const tickInterval = domainMax < 10 ? 1 : domainMax < 20 ? 2 : domainMax < 45 ? 5: 10;
+  const tickInterval = domainMax < 10 ? 1 : domainMax < 20 ? 2 : domainMax < 45 ? 5: domainMax < 100 ? 10 : 20;
   const leftTicks = Array.from({ length: Math.floor(domainMax / tickInterval) + 1 }, (_, i) => i * tickInterval);
   const showHeadway = data.some((b) => b.medianHeadway !== null);
   const maxHeadway = Math.max(...data.map((b) => b.medianHeadway ?? 0), 0);
