@@ -12,67 +12,6 @@ function loadSql(file: string, phA: string, phB: string): string {
     .replace("/*STOP_IDS_B*/", phB);
 }
 
-interface CalendarRow {
-  service_id: number;
-  monday: number;
-  tuesday: number;
-  wednesday: number;
-  thursday: number;
-  friday: number;
-  saturday: number;
-  sunday: number;
-  start_date: string;
-  end_date: string;
-}
-
-interface CalendarDateRow {
-  service_id: number;
-  date: string;
-  exception_type: number;
-}
-
-function parseYYYYMMDD(s: string): Date {
-  return new Date(
-    parseInt(s.slice(0, 4)),
-    parseInt(s.slice(4, 6)) - 1,
-    parseInt(s.slice(6, 8))
-  );
-}
-
-// Returns a Map<weekday (0=Mon), Set<dateString YYYYMMDD>>
-function buildServiceDates(
-  cal: CalendarRow,
-  exceptions: CalendarDateRow[]
-): Map<number, Set<string>> {
-  const dayFlags = [cal.monday, cal.tuesday, cal.wednesday, cal.thursday, cal.friday, cal.saturday, cal.sunday];
-  const added = new Set(exceptions.filter((e) => e.exception_type === 1).map((e) => e.date));
-  const removed = new Set(exceptions.filter((e) => e.exception_type === 2).map((e) => e.date));
-
-  const result = new Map<number, Set<string>>();
-  for (let i = 0; i < 7; i++) result.set(i, new Set());
-
-  const start = parseYYYYMMDD(cal.start_date);
-  const end = parseYYYYMMDD(cal.end_date);
-
-  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    const dateStr = `${y}${m}${day}`;
-
-    // JS: 0=Sun, 1=Mon...6=Sat → convert to 0=Mon...6=Sun
-    const jsDow = d.getDay();
-    const weekday = jsDow === 0 ? 6 : jsDow - 1;
-
-    if (removed.has(dateStr)) continue;
-    if (dayFlags[weekday] === 1 || added.has(dateStr)) {
-      result.get(weekday)!.add(dateStr);
-    }
-  }
-
-  return result;
-}
-
 function makePlaceholders(count: number): string {
   return Array.from({ length: count }, () => "?").join(", ");
 }
@@ -114,7 +53,6 @@ export function queryCadence(stopIdsA: string[], stopIdsB: string[]): CadenceRes
 
   log(`start — A:${stopIdsA.length} ids, B:${stopIdsB.length} ids`);
 
-  // --- Direct trips query ---
   const phA = makePlaceholders(stopIdsA.length);
   const phB = makePlaceholders(stopIdsB.length);
 
@@ -122,76 +60,94 @@ export function queryCadence(stopIdsA: string[], stopIdsB: string[]): CadenceRes
     .all(...stopIdsA, ...stopIdsB) as RawTripRow[];
   log(`direct query done — ${directRows.length} rows`);
 
-  // --- Headway query: individual departure times (no GROUP BY) ---
   const departureRows = db.prepare(loadSql("departures.sql", phA, phB))
     .all(...stopIdsA, ...stopIdsB) as { hour_bucket: number; service_id: number; departure_time: string }[];
   log(`departure query done — ${departureRows.length} rows`);
 
-  // --- Load calendar data for all relevant service_ids ---
   const serviceIds = new Set<number>();
   for (const r of directRows) serviceIds.add(r.service_id);
+  for (const r of departureRows) serviceIds.add(r.service_id);
 
-  const calRows = db.prepare(
-    `SELECT * FROM calendar WHERE service_id IN (${makePlaceholders(serviceIds.size)})`
-  ).all(...serviceIds) as CalendarRow[];
+  const svcIdList = [...serviceIds];
+  const ph = makePlaceholders(svcIdList.length);
 
-  const calDateRows = db.prepare(
-    `SELECT * FROM calendar_dates WHERE service_id IN (${makePlaceholders(serviceIds.size)})`
-  ).all(...serviceIds) as CalendarDateRow[];
+  // Per-service-per-weekday date counts (for trip count weighting)
+  const dateCountRows = db.prepare(
+    `SELECT service_id, weekday, COUNT(*) as date_count FROM service_dates WHERE service_id IN (${ph}) GROUP BY service_id, weekday`
+  ).all(...svcIdList) as { service_id: number; weekday: number; date_count: number }[];
 
-  // Build per-service active date sets
-  const serviceDateMap = new Map<number, Map<number, Set<string>>>();
-  for (const cal of calRows) {
-    const exceptions = calDateRows.filter((e) => e.service_id === cal.service_id);
-    serviceDateMap.set(cal.service_id, buildServiceDates(cal, exceptions));
+  const svcWdCount = new Map<number, Map<number, number>>();
+  for (const r of dateCountRows) {
+    if (!svcWdCount.has(r.service_id)) svcWdCount.set(r.service_id, new Map());
+    svcWdCount.get(r.service_id)!.set(r.weekday, r.date_count);
   }
 
-  // --- Compute headway: weekday -> hour -> date -> departure minutes[] ---
-  // Map: weekday -> hour -> date -> minutes[]
+  // Full date list per service per weekday (for headway computation)
+  const serviceDateRows = db.prepare(
+    `SELECT service_id, weekday, date FROM service_dates WHERE service_id IN (${ph})`
+  ).all(...svcIdList) as { service_id: number; weekday: number; date: string }[];
+
+  const serviceDateMap = new Map<number, Map<number, string[]>>();
+  for (const r of serviceDateRows) {
+    if (!serviceDateMap.has(r.service_id)) serviceDateMap.set(r.service_id, new Map());
+    const byWd = serviceDateMap.get(r.service_id)!;
+    if (!byWd.has(r.weekday)) byWd.set(r.weekday, []);
+    byWd.get(r.weekday)!.push(r.date);
+  }
+  log(`service_dates loaded`);
+
+  // Compute headway: weekday -> hour -> date -> departure minutes[]
   const deptsByDateHour = new Map<number, Map<number, Map<string, number[]>>>();
   for (const row of departureRows) {
     const mins = departureTimeToMinutes(row.departure_time);
     for (let wd = 0; wd < 7; wd++) {
-      const dateSet = serviceDateMap.get(row.service_id)?.get(wd);
-      if (!dateSet || dateSet.size === 0) continue;
+      const dates = serviceDateMap.get(row.service_id)?.get(wd);
+      if (!dates || dates.length === 0) continue;
       if (!deptsByDateHour.has(wd)) deptsByDateHour.set(wd, new Map());
       const byHour = deptsByDateHour.get(wd)!;
       if (!byHour.has(row.hour_bucket)) byHour.set(row.hour_bucket, new Map());
       const byDate = byHour.get(row.hour_bucket)!;
-      for (const date of dateSet) {
+      for (const date of dates) {
         if (!byDate.has(date)) byDate.set(date, []);
         byDate.get(date)!.push(mins);
       }
     }
   }
 
-  // Accumulate: total trips and total active dates per (weekday, hour, mode)
-  // We accumulate across service_ids, weighted by how many days that service runs
   type Acc = Record<number, Record<number, Record<ModeKey, number>>>;
-
   const totalTrips: Acc = {};
-  const totalDates: Record<number, Partial<Record<ModeKey, Set<string>>>> = {};
+  const modeServiceIds = new Map<ModeKey, Set<number>>();
 
-  function ensureSlot(weekday: number, hour: number, mode: ModeKey) {
+  function ensureSlot(weekday: number, hour: number) {
     if (!totalTrips[weekday]) totalTrips[weekday] = {};
     if (!totalTrips[weekday][hour]) totalTrips[weekday][hour] = { bus: 0, rail: 0, stog: 0, metro: 0, tram: 0, ferry: 0 };
-    if (!totalDates[weekday]) totalDates[weekday] = {} as Partial<Record<ModeKey, Set<string>>>;
-    if (!totalDates[weekday][mode]) totalDates[weekday][mode] = new Set();
   }
 
   for (const row of directRows) {
     const mode = normalizeRouteType(row.route_type);
     const hour = row.hour_bucket;
     for (let wd = 0; wd < 7; wd++) {
-      const dateSet = serviceDateMap.get(row.service_id)?.get(wd);
-      if (!dateSet || dateSet.size === 0) continue;
-      ensureSlot(wd, hour, mode);
-      totalTrips[wd][hour][mode] += row.trip_count * dateSet.size;
-      for (const d of dateSet) totalDates[wd][mode]!.add(d);
+      const dateCount = svcWdCount.get(row.service_id)?.get(wd) ?? 0;
+      if (dateCount === 0) continue;
+      ensureSlot(wd, hour);
+      totalTrips[wd][hour][mode] += row.trip_count * dateCount;
+      if (!modeServiceIds.has(mode)) modeServiceIds.set(mode, new Set());
+      modeServiceIds.get(mode)!.add(row.service_id);
     }
   }
 
-  // Build final result: average = totalTrips / totalDates
+  // Distinct active dates per (weekday, mode) — used as the averaging denominator
+  const totalDatesCount: Record<number, Partial<Record<ModeKey, number>>> = {};
+  for (const [mode, sids] of modeServiceIds) {
+    const rows = db.prepare(
+      `SELECT weekday, COUNT(DISTINCT date) as date_count FROM service_dates WHERE service_id IN (${makePlaceholders(sids.size)}) GROUP BY weekday`
+    ).all(...sids) as { weekday: number; date_count: number }[];
+    for (const r of rows) {
+      if (!totalDatesCount[r.weekday]) totalDatesCount[r.weekday] = {};
+      totalDatesCount[r.weekday]![mode] = r.date_count;
+    }
+  }
+
   const result = buildEmptyResult();
   for (let wd = 0; wd < 7; wd++) {
     for (let h = 0; h < 24; h++) {
@@ -199,7 +155,7 @@ export function queryCadence(stopIdsA: string[], stopIdsB: string[]): CadenceRes
       if (!totalTrips[wd]?.[h]) continue;
       for (const mode of Object.keys(totalTrips[wd][h]) as ModeKey[]) {
         const trips = totalTrips[wd][h][mode];
-        const dates = totalDates[wd]?.[mode]?.size ?? 0;
+        const dates = totalDatesCount[wd]?.[mode] ?? 0;
         if (dates > 0) {
           bucket[mode] = Math.round((trips / dates) * 10) / 10;
         }
@@ -207,7 +163,6 @@ export function queryCadence(stopIdsA: string[], stopIdsB: string[]): CadenceRes
     }
   }
 
-  // Compute median headway per (weekday, hour) and assign to result
   for (let wd = 0; wd < 7; wd++) {
     for (let h = 0; h < 24; h++) {
       const dateMap = deptsByDateHour.get(wd)?.get(h);

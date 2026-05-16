@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { fileURLToPath } from "node:url";
+import { populateServiceDates } from "../src/sql/derived_tables/service_dates";
 
 const GTFS_ZIP = path.resolve(process.cwd(), "GTFS.zip");
 const DB_PATH = path.resolve(process.cwd(), "gtfs.db");
@@ -189,11 +190,12 @@ async function main() {
     process.exit(1);
   }
 
-  // Delete existing DB
-  if (fs.existsSync(DB_PATH)) {
-    fs.unlinkSync(DB_PATH);
-    console.log("Deleted existing gtfs.db");
+  // Delete existing DB and any leftover WAL files
+  for (const suffix of ["", "-shm", "-wal"]) {
+    const p = DB_PATH + suffix;
+    if (fs.existsSync(p)) fs.unlinkSync(p);
   }
+  console.log("Deleted existing gtfs.db");
 
   console.log("Extracting zip...");
   const zip = new AdmZip(GTFS_ZIP);
@@ -245,6 +247,8 @@ async function main() {
       console.log(`  ${file}`);
     }
   }
+  const count = populateServiceDates(db);
+  console.log(`  service_dates: ${count.toLocaleString()} rows`);
   console.log(`  Done in ${((Date.now() - derivedT0) / 1000).toFixed(1)}s`);
 
   db.exec("PRAGMA foreign_keys = ON; ANALYZE;");

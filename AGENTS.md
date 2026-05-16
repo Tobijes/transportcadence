@@ -24,8 +24,9 @@ src/
     ui/                   -- Shadcn primitives (button, popover)
   lib/
     db.ts                 -- SQLite singleton (node:sqlite)
-    queries.ts            -- queryCadence(): two SQL queries (grouped trip counts + individual
-    |                        departure times), computes per-weekday averages and median headways
+    queries.ts            -- queryCadence(): queries direct_trips + departures + service_dates.
+    |                        Computes per-weekday trip averages (weighted by active date count)
+    |                        and median headways. Calendar expansion is precomputed in service_dates.
     route-types.ts        -- GTFS route_type → ModeKey mapping, colors, labels
     stops.ts              -- getAllStopNames(), getStopIdsByName()
     types.ts              -- CadenceResult, HourBucket (includes medianHeadway), Weekday
@@ -34,12 +35,13 @@ src/
     tables/               -- One .sql per raw GTFS table (agency, calendar, calendar_dates,
     |                        routes, stops, trips, stop_times, transfers)
     derived_tables/
-      service_weekdays.sql  -- Weekday weights per service_id (calendar + calendar_dates merged)
+      service_dates.sql   -- Fully expanded active dates per service_id: one row per
+      |                      (service_id, date YYYYMMDD, weekday 0=Mon..6=Sun).
+      |                      Built at ingest via recursive CTE over calendar + calendar_dates.
     queries/              -- SQL query templates. Placeholders /*STOP_IDS_A*/ and /*STOP_IDS_B*/
     |                        are substituted at runtime by loadSql() in queries.ts
       direct_trips.sql    -- Grouped trip counts by hour/mode/service (used by queryCadence)
       departures.sql      -- Individual departure times for headway computation (used by queryCadence)
-      trips_between.sql   -- Scratch/dev query (not used at runtime)
 ```
 
 ## Chart architecture
@@ -53,4 +55,8 @@ src/
 
 ## Headway computation
 
-`queryCadence()` runs a second SQL query (no GROUP BY) to get individual `departure_time` values. For each weekday, the TypeScript code expands departures per active calendar date, sorts them within each hour bucket, computes consecutive gaps, then takes the median across all dates. GTFS times past midnight (e.g. "25:10:00") are normalized with `% 24` on the hour component before converting to minutes.
+`queryCadence()` runs a second SQL query (no GROUP BY) to get individual `departure_time` values. For each weekday, the TypeScript code expands departures per active calendar date (looked up from `service_dates`), sorts them within each hour bucket, computes consecutive gaps, then takes the median across all dates. GTFS times past midnight (e.g. "25:10:00") are normalized with `% 24` on the hour component before converting to minutes.
+
+## Calendar expansion
+
+Active service dates are precomputed into `service_dates` at ingest time (see `service_dates.sql`). `queryCadence()` queries this table directly instead of expanding date ranges in TypeScript at runtime. The ingest script (`scripts/ingest.ts`) also cleans up SQLite WAL files (`-shm`, `-wal`) before recreating the database to prevent stale file errors.
