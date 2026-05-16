@@ -252,6 +252,8 @@ async function main() {
   console.log(`  Done in ${((Date.now() - derivedT0) / 1000).toFixed(1)}s`);
 
   db.exec("PRAGMA foreign_keys = ON; ANALYZE;");
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  db.exec("PRAGMA journal_mode = DELETE;");
   db.close();
 
   // Cleanup temp dir
