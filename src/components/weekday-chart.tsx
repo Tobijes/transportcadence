@@ -34,7 +34,7 @@ export function WeekdayChart({ day, data }: WeekdayChartProps) {
   const rightTicks = Array.from({ length: leftTicks.length }, (_, i) => Math.round((rightDomainMax / rightIntervals) * i));
 
   return (
-    <div className="rounded-lg border bg-card p-4">
+    <div className="bg-card -mx-4 px-2 py-3 sm:mx-0 sm:rounded-lg sm:border sm:px-4">
       <h3 className="mb-3 text-sm font-semibold text-card-foreground">{day}</h3>
       {hasData ? (
         <>
@@ -65,7 +65,7 @@ export function WeekdayChart({ day, data }: WeekdayChartProps) {
               axisLine={false}
               tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }}
               tickFormatter={(v) => String(v)}
-              label={{ value: "Time", position: "insideBottom", offset: -10, style: { fontSize: 13, fill: "hsl(var(--muted-foreground))", textAnchor: "middle" } }}
+              label={{ value: "Klokkeslæt", position: "insideBottom", offset: -10, style: { fontSize: 13, fill: "hsl(var(--muted-foreground))", textAnchor: "middle" } }}
             />
             <YAxis
               yAxisId="left"
