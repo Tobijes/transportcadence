@@ -119,7 +119,7 @@ export function WeekdayChart({ day, data }: WeekdayChartProps) {
                           fontSize={fontSize}
                           fill="hsl(var(--muted-foreground))"
                         >
-                          {total}
+                          {Math.round(total * 10) / 10}
                         </text>
                       );
                     }}

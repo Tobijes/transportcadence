@@ -4,7 +4,7 @@ import * as React from "react";
 import { StopSelector } from "@/components/stop-selector";
 import { WeekdayChart } from "@/components/weekday-chart";
 import { ChartLegend } from "@/components/chart-legend";
-import { Button } from "@/components/ui/button";
+import { Loader2 } from "lucide-react";
 import { queryTripCadence } from "@/app/actions/query-trips";
 import type { CadenceResult, Weekday } from "@/lib/types";
 
@@ -25,31 +25,36 @@ export function CadenceDashboard() {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  async function handleSearch() {
+  React.useEffect(() => {
     if (!stopA || !stopB) return;
+
+    let cancelled = false;
     setLoading(true);
     setError(null);
-    try {
-      const result = await queryTripCadence(stopA, stopB);
-      setData(result);
-    } catch (e) {
-      setError("Noget gik galt. Prøv igen.");
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  }
 
-  const canSearch = stopA && stopB && !loading;
+    queryTripCadence(stopA, stopB)
+      .then((result) => {
+        if (!cancelled) setData(result);
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setError("Noget gik galt. Prøv igen.");
+          console.error(e);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [stopA, stopB]);
 
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-end gap-4">
         <StopSelector label="Fra" value={stopA} onChange={setStopA} storageKey="fra" />
         <StopSelector label="Til" value={stopB} onChange={setStopB} storageKey="til" />
-        <Button onClick={handleSearch} disabled={!canSearch} className="self-end">
-          {loading ? "Søger..." : "Vis kadence"}
-        </Button>
+        {loading && <Loader2 className="h-5 w-5 animate-spin text-muted-foreground self-end mb-2" />}
       </div>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
