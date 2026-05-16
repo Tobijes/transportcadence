@@ -7,7 +7,7 @@ import * as os from "node:os";
 import { fileURLToPath } from "node:url";
 
 const GTFS_ZIP = path.resolve(process.cwd(), "GTFS.zip");
-const DB_PATH = path.resolve(process.cwd(), "gtfs.db");
+const DB_PATH = path.resolve(process.cwd(), "dataset/gtfs.db");
 const BATCH_SIZE = 10_000;
 
 // Tables to ingest, in dependency order

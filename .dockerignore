@@ -1,0 +1,10 @@
+node_modules
+.next
+.git
+dataset
+GTFS
+GTFS.zip
+*.db
+*.db-shm
+*.db-wal
+*.zip
