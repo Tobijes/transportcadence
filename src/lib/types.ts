@@ -23,3 +23,13 @@ export interface RawTripRow {
   service_id: number;
   trip_count: number;
 }
+
+export interface QueryMeta {
+  fromStops: string[];
+  toStops: string[];
+}
+
+export type CadenceQueryResult = {
+  cadence: CadenceResult;
+  meta: QueryMeta;
+};

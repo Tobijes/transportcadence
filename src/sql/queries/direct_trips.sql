@@ -2,7 +2,7 @@ SELECT
   CAST(SUBSTR(st_a.departure_time, 1, 2) AS INTEGER) % 24 AS hour_bucket,
   r.route_type,
   t.service_id,
-  COUNT(*) AS trip_count
+  COUNT(DISTINCT st_a.trip_id) AS trip_count
 FROM stop_times st_a
 JOIN stop_times st_b
   ON st_a.trip_id = st_b.trip_id

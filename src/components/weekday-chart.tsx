@@ -101,7 +101,6 @@ export function WeekdayChart({ day, data }: WeekdayChartProps) {
                 yAxisId="left"
                 isAnimationActive={false}
                 barSize={20}
-                radius={[5, 5, 0, 0]}
               >
                 {idx === MODE_KEYS.length - 1 && (
                   <LabelList
@@ -136,7 +135,6 @@ export function WeekdayChart({ day, data }: WeekdayChartProps) {
                 opacity={0.3}
                 isAnimationActive={false}
                 barSize={10}
-                radius={[3, 3, 0, 0]}
               />
             )}
           </ComposedChart>

@@ -28,7 +28,9 @@ src/
     |                        Computes per-weekday trip averages (weighted by active date count)
     |                        and median headways. Calendar expansion is precomputed in service_dates.
     route-types.ts        -- GTFS route_type → ModeKey mapping, colors, labels
-    stops.ts              -- getAllStopNames(), getStopIdsByName()
+    stops.ts              -- searchStopNames(), getStopIdsByName(), getStopIdsByProximity()
+    |                        getStopIdsByProximity() expands a stop name to all stops within 250m
+    |                        bounding box (purely geographic, no name filtering on result set)
     types.ts              -- CadenceResult, HourBucket (includes medianHeadway), Weekday
   sql/
     indexes.sql           -- All index CREATE statements
@@ -40,8 +42,10 @@ src/
       |                      Built at ingest via recursive CTE over calendar + calendar_dates.
     queries/              -- SQL query templates. Placeholders /*STOP_IDS_A*/ and /*STOP_IDS_B*/
     |                        are substituted at runtime by loadSql() in queries.ts
-      direct_trips.sql    -- Grouped trip counts by hour/mode/service (used by queryCadence)
-      departures.sql      -- Individual departure times for headway computation (used by queryCadence)
+      direct_trips.sql    -- Grouped trip counts by hour/mode/service. Uses COUNT(DISTINCT trip_id)
+      |                      to avoid overcounting when proximity expansion matches multiple stops per trip.
+      departures.sql      -- Individual departure times for headway computation. Groups by trip_id with
+      |                      MIN(departure_time) to deduplicate multi-platform matches.
 ```
 
 ## Chart architecture
@@ -56,6 +60,16 @@ src/
 ## Headway computation
 
 `queryCadence()` runs a second SQL query (no GROUP BY) to get individual `departure_time` values. For each weekday, the TypeScript code expands departures per active calendar date (looked up from `service_dates`), sorts them within each hour bucket, computes consecutive gaps, then takes the median across all dates. GTFS times past midnight (e.g. "25:10:00") are normalized with `% 24` on the hour component before converting to minutes.
+
+## Stop proximity expansion
+
+`getStopIdsByProximity()` in `stops.ts` resolves a stop name to a geographic anchor (first stop with that name that has coordinates), then returns all stops within a 250m bounding box — regardless of their name. This is always-on: selecting "København H" also picks up "København H (Metro)" and any other nearby stops.
+
+Constants for Denmark (~55.7°N): `LAT_OFFSET = 250 / 111_320`, `LON_OFFSET = 250 / 62_800`. Falls back to `getStopIdsByName()` if the anchor stop has no coordinates.
+
+Both SQL queries use deduplication to handle the expanded stop sets:
+- `direct_trips.sql`: `COUNT(DISTINCT st_a.trip_id)` prevents a trip from being counted multiple times when it passes through multiple stops in the proximity set.
+- `departures.sql`: `GROUP BY st_a.trip_id` with `MIN(st_a.departure_time)` picks one departure per trip for headway computation.
 
 ## Calendar expansion
 
