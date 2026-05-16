@@ -45,8 +45,8 @@ export function CadenceDashboard() {
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-end gap-4">
-        <StopSelector label="Fra" value={stopA} onChange={setStopA} />
-        <StopSelector label="Til" value={stopB} onChange={setStopB} />
+        <StopSelector label="Fra" value={stopA} onChange={setStopA} storageKey="fra" />
+        <StopSelector label="Til" value={stopB} onChange={setStopB} storageKey="til" />
         <Button onClick={handleSearch} disabled={!canSearch} className="self-end">
           {loading ? "Søger..." : "Vis kadence"}
         </Button>

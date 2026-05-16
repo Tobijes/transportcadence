@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { searchStops } from "@/app/actions/query-trips";
+import { getRecentStops, addRecentStop } from "@/lib/recent-stops";
 
 function HighlightedName({ name, query }: { name: string; query: string }) {
   if (!query) return <span className="truncate">{name}</span>;
@@ -24,18 +25,44 @@ interface StopSelectorProps {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  storageKey: string;
 }
 
-export function StopSelector({ label, value, onChange }: StopSelectorProps) {
+export function StopSelector({ label, value, onChange, storageKey }: StopSelectorProps) {
   const [open, setOpen] = React.useState(false);
   const [search, setSearch] = React.useState("");
   const [highlighted, setHighlighted] = React.useState("");
   const [results, setResults] = React.useState<string[]>([]);
   const [loading, setLoading] = React.useState(false);
+  const [recentStops, setRecentStops] = React.useState<string[]>([]);
+  const defaultResultsRef = React.useRef<string[] | null>(null);
+
+  // Eagerly fetch default results on mount so they're ready when the popover opens
+  React.useEffect(() => {
+    searchStops("").then((names) => {
+      defaultResultsRef.current = names;
+    });
+  }, []);
+
+  // Load recent stops when popover opens
+  React.useEffect(() => {
+    if (open) {
+      setRecentStops(getRecentStops(storageKey));
+    }
+  }, [open, storageKey]);
 
   React.useEffect(() => {
     if (!open) return;
     const trimmed = search.trim();
+
+    // For empty query, use cached defaults immediately — no debounce or spinner
+    if (trimmed === "" && defaultResultsRef.current) {
+      setResults(defaultResultsRef.current);
+      setHighlighted("");
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     const controller = new AbortController();
     const timer = setTimeout(() => {
@@ -52,6 +79,21 @@ export function StopSelector({ label, value, onChange }: StopSelectorProps) {
       controller.abort();
     };
   }, [search, open]);
+
+  function selectStop(name: string) {
+    onChange(name);
+    addRecentStop(storageKey, name);
+    setSearch("");
+    setOpen(false);
+  }
+
+  const trimmedSearch = search.trim().toLowerCase();
+  const filteredRecent = recentStops.filter(
+    (name) => trimmedSearch === "" || name.toLowerCase().includes(trimmedSearch)
+  );
+  const recentSet = new Set(filteredRecent);
+  const filteredResults = results.filter((name) => !recentSet.has(name));
+  const isEmpty = filteredRecent.length === 0 && filteredResults.length === 0;
 
   return (
     <div className="flex flex-col gap-1">
@@ -79,30 +121,49 @@ export function StopSelector({ label, value, onChange }: StopSelectorProps) {
             />
           </div>
           <div className="max-h-64 overflow-y-auto">
-            {loading ? (
+            {loading && filteredRecent.length === 0 ? (
               <div className="flex justify-center py-6">
                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
               </div>
-            ) : results.length === 0 ? (
+            ) : isEmpty ? (
               <p className="py-6 text-center text-sm text-muted-foreground">Intet fundet.</p>
             ) : (
-              results.map((name) => (
-                <button
-                  key={name}
-                  className={cn(
-                    "flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground",
-                    value === name && "bg-accent text-accent-foreground"
-                  )}
-                  onClick={() => {
-                    onChange(name);
-                    setSearch("");
-                    setOpen(false);
-                  }}
-                >
-                  <Check className={cn("h-4 w-4 shrink-0", value === name ? "opacity-100" : "opacity-0")} />
-                  <HighlightedName name={name} query={highlighted} />
-                </button>
-              ))
+              <>
+                {filteredRecent.length > 0 && (
+                  <>
+                    <p className="px-3 pb-1 pt-2 text-xs font-medium text-muted-foreground">
+                      Seneste valg
+                    </p>
+                    {filteredRecent.map((name) => (
+                      <button
+                        key={`recent-${name}`}
+                        className={cn(
+                          "flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground",
+                          value === name && "bg-accent text-accent-foreground"
+                        )}
+                        onClick={() => selectStop(name)}
+                      >
+                        <Check className={cn("h-4 w-4 shrink-0", value === name ? "opacity-100" : "opacity-0")} />
+                        <HighlightedName name={name} query={highlighted} />
+                      </button>
+                    ))}
+                    {filteredResults.length > 0 && <div className="my-1 border-t" />}
+                  </>
+                )}
+                {filteredResults.map((name) => (
+                  <button
+                    key={name}
+                    className={cn(
+                      "flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground",
+                      value === name && "bg-accent text-accent-foreground"
+                    )}
+                    onClick={() => selectStop(name)}
+                  >
+                    <Check className={cn("h-4 w-4 shrink-0", value === name ? "opacity-100" : "opacity-0")} />
+                    <HighlightedName name={name} query={highlighted} />
+                  </button>
+                ))}
+              </>
             )}
           </div>
         </PopoverContent>
