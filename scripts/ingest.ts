@@ -5,7 +5,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { fileURLToPath } from "node:url";
-import { populateServiceDates } from "../src/sql/derived_tables/service_dates";
 
 const GTFS_ZIP = path.resolve(process.cwd(), "GTFS.zip");
 const DB_PATH = path.resolve(process.cwd(), "gtfs.db");
@@ -225,6 +224,12 @@ async function main() {
     const count = ingestTable(db, table, content);
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     console.log(`  ${count.toLocaleString()} rows in ${elapsed}s`);
+    const tableHookPath = path.join(SQL_TABLES_DIR, `${table}.ts`);
+    if (fs.existsSync(tableHookPath)) {
+      const { default: postIngest } = await import(tableHookPath);
+      postIngest(db);
+      console.log(`  Post-ingest hook: ${table}.ts`);
+    }
   }
 
   console.log("Creating indexes...");
@@ -245,10 +250,14 @@ async function main() {
         db.exec(stmt + ";");
       }
       console.log(`  ${file}`);
+      const derivedHookPath = path.join(SQL_DERIVED_DIR, file.replace(".sql", ".ts"));
+      if (fs.existsSync(derivedHookPath)) {
+        const { default: postIngest } = await import(derivedHookPath);
+        postIngest(db);
+        console.log(`  Post-ingest hook: ${file.replace(".sql", ".ts")}`);
+      }
     }
   }
-  const count = populateServiceDates(db);
-  console.log(`  service_dates: ${count.toLocaleString()} rows`);
   console.log(`  Done in ${((Date.now() - derivedT0) / 1000).toFixed(1)}s`);
 
   db.exec("PRAGMA foreign_keys = ON; ANALYZE;");

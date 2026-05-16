@@ -2,6 +2,7 @@ CREATE TABLE stops (
   stop_id             TEXT PRIMARY KEY,
   stop_code           TEXT,
   stop_name           TEXT NOT NULL,
+  stop_name_lower     TEXT,
   stop_desc           TEXT,
   stop_lat            REAL,
   stop_lon            REAL,

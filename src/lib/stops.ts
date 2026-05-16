@@ -11,16 +11,17 @@ function isRealStop(name: string): boolean {
 
 export function searchStopNames(query: string, limit = 20): string[] {
   const db = getDb();
+  const lowerQuery = query.toLowerCase();
   const rows = db
     .prepare(
       `SELECT s.stop_name
        FROM stops s
        LEFT JOIN stop_times st ON st.stop_id = s.stop_id
-       WHERE s.stop_name LIKE ?
+       WHERE s.stop_name_lower LIKE ?
        GROUP BY s.stop_id
        ORDER BY COUNT(st.trip_id) DESC`
     )
-    .all(`%${query}%`) as { stop_name: string }[];
+    .all(`%${lowerQuery}%`) as { stop_name: string }[];
   const seen = new Set<string>();
   const results: string[] = [];
   for (const { stop_name } of rows) {

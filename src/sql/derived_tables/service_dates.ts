@@ -27,7 +27,7 @@ function jsDownToWeekday(jsDay: number): number {
   return jsDay === 0 ? 6 : jsDay - 1;
 }
 
-export function populateServiceDates(db: DatabaseSync): number {
+export default function postIngest(db: DatabaseSync): number {
   const calRows = db.prepare("SELECT * FROM calendar").all() as CalendarRow[];
   const calDateRows = db.prepare("SELECT * FROM calendar_dates").all() as CalendarDateRow[];
 

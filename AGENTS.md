@@ -8,7 +8,7 @@ Always remember to update this document (AGENTS.md) when
 
 ```
 scripts/
-  ingest.ts               -- GTFS ingestion pipeline (schema → load → indexes → derived tables)
+  ingest.ts               -- GTFS ingestion pipeline (schema → load → per-table .ts hooks → indexes → derived tables + .ts hooks)
 src/
   app/
     actions/
@@ -29,6 +29,7 @@ src/
     |                        and median headways. Calendar expansion is precomputed in service_dates.
     route-types.ts        -- GTFS route_type → ModeKey mapping, colors, labels
     stops.ts              -- searchStopNames(), getStopIdsByName(), getStopIdsByProximity()
+    |                        searchStopNames() matches against stop_name_lower (Unicode-safe)
     |                        getStopIdsByProximity() expands a stop name to all stops within 250m
     |                        bounding box (purely geographic, no name filtering on result set)
     types.ts              -- CadenceResult, HourBucket (includes medianHeadway), Weekday
@@ -36,10 +37,17 @@ src/
     indexes.sql           -- All index CREATE statements
     tables/               -- One .sql per raw GTFS table (agency, calendar, calendar_dates,
     |                        routes, stops, trips, stop_times, transfers)
+    |                        A matching .ts file (e.g. stops.ts) can export a default
+    |                        postIngest(db: DatabaseSync) function; ingest.ts calls it
+    |                        automatically after loading that table's rows.
+      stops.ts            -- Post-ingest hook: populates stop_name_lower using JS toLowerCase()
+      |                      (SQLite LOWER() is ASCII-only; this handles Æ, Ø, Å correctly)
     derived_tables/
       service_dates.sql   -- Fully expanded active dates per service_id: one row per
       |                      (service_id, date YYYYMMDD, weekday 0=Mon..6=Sun).
       |                      Built at ingest via recursive CTE over calendar + calendar_dates.
+      service_dates.ts    -- Post-ingest hook (default export postIngest): populates service_dates
+      |                      rows in TypeScript (calendar expansion requires date arithmetic)
     queries/              -- SQL query templates. Placeholders /*STOP_IDS_A*/ and /*STOP_IDS_B*/
     |                        are substituted at runtime by loadSql() in queries.ts
       direct_trips.sql    -- Grouped trip counts by hour/mode/service. Uses COUNT(DISTINCT trip_id)
