@@ -1,8 +1,6 @@
-import { getAllStopNames } from "@/lib/stops";
 import { CadenceDashboard } from "@/components/cadence-dashboard";
 
 export default function Home() {
-  const stopNames = getAllStopNames();
   return (
     <main className="mx-auto max-w-6xl px-4 py-10">
       <div className="mb-8">
@@ -11,7 +9,7 @@ export default function Home() {
           Hvor ofte kan du komme fra A til B med offentlig transport?
         </p>
       </div>
-      <CadenceDashboard stopNames={stopNames} />
+      <CadenceDashboard />
     </main>
   );
 }

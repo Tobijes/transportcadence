@@ -8,6 +8,7 @@ export interface HourBucket {
   metro: number;
   tram: number;
   ferry: number;
+  medianHeadway: number | null; // median minutes between consecutive departures, null if < 2 trips
 }
 
 export type WeekdayData = HourBucket[];

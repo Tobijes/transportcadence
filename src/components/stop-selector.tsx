@@ -5,30 +5,45 @@ import { Check, ChevronsUpDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { searchStops } from "@/app/actions/query-trips";
+
+function HighlightedName({ name, query }: { name: string; query: string }) {
+  if (!query) return <span className="truncate">{name}</span>;
+  const idx = name.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return <span className="truncate">{name}</span>;
+  return (
+    <span className="truncate">
+      {name.slice(0, idx)}
+      <strong>{name.slice(idx, idx + query.length)}</strong>
+      {name.slice(idx + query.length)}
+    </span>
+  );
+}
 
 interface StopSelectorProps {
   label: string;
   value: string;
   onChange: (value: string) => void;
-  stopNames: string[];
 }
 
-export function StopSelector({ label, value, onChange, stopNames }: StopSelectorProps) {
+export function StopSelector({ label, value, onChange }: StopSelectorProps) {
   const [open, setOpen] = React.useState(false);
   const [search, setSearch] = React.useState("");
+  const [highlighted, setHighlighted] = React.useState("");
+  const [results, setResults] = React.useState<string[]>([]);
 
-  const filtered = React.useMemo(() => {
-    if (!search) return stopNames.slice(0, 100);
-    const lower = search.toLowerCase();
-    const results: string[] = [];
-    for (const name of stopNames) {
-      if (name.toLowerCase().includes(lower)) {
-        results.push(name);
-        if (results.length >= 100) break;
+  React.useEffect(() => {
+    if (!open) return;
+    const trimmed = search.trim();
+    const controller = new AbortController();
+    searchStops(trimmed).then((names) => {
+      if (!controller.signal.aborted) {
+        setHighlighted(trimmed);
+        setResults(names);
       }
-    }
-    return results;
-  }, [search, stopNames]);
+    });
+    return () => controller.abort();
+  }, [search, open]);
 
   return (
     <div className="flex flex-col gap-1">
@@ -56,10 +71,10 @@ export function StopSelector({ label, value, onChange, stopNames }: StopSelector
             />
           </div>
           <div className="max-h-64 overflow-y-auto">
-            {filtered.length === 0 ? (
+            {results.length === 0 ? (
               <p className="py-6 text-center text-sm text-muted-foreground">Intet fundet.</p>
             ) : (
-              filtered.map((name) => (
+              results.map((name) => (
                 <button
                   key={name}
                   className={cn(
@@ -73,7 +88,7 @@ export function StopSelector({ label, value, onChange, stopNames }: StopSelector
                   }}
                 >
                   <Check className={cn("h-4 w-4 shrink-0", value === name ? "opacity-100" : "opacity-0")} />
-                  <span className="truncate">{name}</span>
+                  <HighlightedName name={name} query={highlighted} />
                 </button>
               ))
             )}

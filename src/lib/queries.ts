@@ -1,6 +1,16 @@
+import { readFileSync } from "fs";
+import { join } from "path";
 import { getDb } from "./db";
 import { normalizeRouteType, type ModeKey } from "./route-types";
 import type { CadenceResult, HourBucket, RawTripRow, Weekday } from "./types";
+
+const SQL_DIR = join(process.cwd(), "src/sql/queries");
+
+function loadSql(file: string, phA: string, phB: string): string {
+  return readFileSync(join(SQL_DIR, file), "utf8")
+    .replace("/*STOP_IDS_A*/", phA)
+    .replace("/*STOP_IDS_B*/", phB);
+}
 
 interface CalendarRow {
   service_id: number;
@@ -67,6 +77,19 @@ function makePlaceholders(count: number): string {
   return Array.from({ length: count }, () => "?").join(", ");
 }
 
+function departureTimeToMinutes(dt: string): number {
+  const parts = dt.split(":");
+  return (parseInt(parts[0], 10) % 24) * 60 + parseInt(parts[1], 10);
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid];
+}
+
 function emptyHourBuckets(): HourBucket[] {
   return Array.from({ length: 24 }, (_, i) => ({
     hour: i,
@@ -76,6 +99,7 @@ function emptyHourBuckets(): HourBucket[] {
     metro: 0,
     tram: 0,
     ferry: 0,
+    medianHeadway: null,
   }));
 }
 
@@ -94,23 +118,14 @@ export function queryCadence(stopIdsA: string[], stopIdsB: string[]): CadenceRes
   const phA = makePlaceholders(stopIdsA.length);
   const phB = makePlaceholders(stopIdsB.length);
 
-  const directRows = db.prepare(`
-    SELECT
-      CAST(SUBSTR(st_a.departure_time, 1, 2) AS INTEGER) % 24 AS hour_bucket,
-      r.route_type,
-      t.service_id,
-      COUNT(*) AS trip_count
-    FROM stop_times st_a
-    JOIN stop_times st_b
-      ON st_a.trip_id = st_b.trip_id
-      AND st_b.stop_sequence > st_a.stop_sequence
-    JOIN trips t ON st_a.trip_id = t.trip_id
-    JOIN routes r ON t.route_id = r.route_id
-    WHERE st_a.stop_id IN (${phA})
-      AND st_b.stop_id IN (${phB})
-    GROUP BY hour_bucket, r.route_type, t.service_id
-  `).all(...stopIdsA, ...stopIdsB) as RawTripRow[];
+  const directRows = db.prepare(loadSql("direct_trips.sql", phA, phB))
+    .all(...stopIdsA, ...stopIdsB) as RawTripRow[];
   log(`direct query done — ${directRows.length} rows`);
+
+  // --- Headway query: individual departure times (no GROUP BY) ---
+  const departureRows = db.prepare(loadSql("departures.sql", phA, phB))
+    .all(...stopIdsA, ...stopIdsB) as { hour_bucket: number; service_id: number; departure_time: string }[];
+  log(`departure query done — ${departureRows.length} rows`);
 
   // --- Load calendar data for all relevant service_ids ---
   const serviceIds = new Set<number>();
@@ -131,11 +146,23 @@ export function queryCadence(stopIdsA: string[], stopIdsB: string[]): CadenceRes
     serviceDateMap.set(cal.service_id, buildServiceDates(cal, exceptions));
   }
 
-  // Count active dates per weekday per service (fallback: use calendar_dates only for services not in calendar)
-  function getActiveDateCount(serviceId: number, weekday: number): number {
-    const dateMap = serviceDateMap.get(serviceId);
-    if (!dateMap) return 0;
-    return dateMap.get(weekday)?.size ?? 0;
+  // --- Compute headway: weekday -> hour -> date -> departure minutes[] ---
+  // Map: weekday -> hour -> date -> minutes[]
+  const deptsByDateHour = new Map<number, Map<number, Map<string, number[]>>>();
+  for (const row of departureRows) {
+    const mins = departureTimeToMinutes(row.departure_time);
+    for (let wd = 0; wd < 7; wd++) {
+      const dateSet = serviceDateMap.get(row.service_id)?.get(wd);
+      if (!dateSet || dateSet.size === 0) continue;
+      if (!deptsByDateHour.has(wd)) deptsByDateHour.set(wd, new Map());
+      const byHour = deptsByDateHour.get(wd)!;
+      if (!byHour.has(row.hour_bucket)) byHour.set(row.hour_bucket, new Map());
+      const byDate = byHour.get(row.hour_bucket)!;
+      for (const date of dateSet) {
+        if (!byDate.has(date)) byDate.set(date, []);
+        byDate.get(date)!.push(mins);
+      }
+    }
   }
 
   // Accumulate: total trips and total active dates per (weekday, hour, mode)
@@ -176,6 +203,24 @@ export function queryCadence(stopIdsA: string[], stopIdsB: string[]): CadenceRes
         if (dates > 0) {
           bucket[mode] = Math.round((trips / dates) * 10) / 10;
         }
+      }
+    }
+  }
+
+  // Compute median headway per (weekday, hour) and assign to result
+  for (let wd = 0; wd < 7; wd++) {
+    for (let h = 0; h < 24; h++) {
+      const dateMap = deptsByDateHour.get(wd)?.get(h);
+      if (!dateMap) continue;
+      const allGaps: number[] = [];
+      for (const departures of dateMap.values()) {
+        departures.sort((a, b) => a - b);
+        for (let i = 1; i < departures.length; i++) {
+          allGaps.push(departures[i] - departures[i - 1]);
+        }
+      }
+      if (allGaps.length > 0) {
+        result[wd as Weekday][h].medianHeadway = Math.round(median(allGaps) * 10) / 10;
       }
     }
   }

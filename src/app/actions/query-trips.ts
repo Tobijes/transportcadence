@@ -1,8 +1,12 @@
 "use server";
 
-import { getStopIdsByName } from "@/lib/stops";
+import { getStopIdsByName, searchStopNames } from "@/lib/stops";
 import { queryCadence } from "@/lib/queries";
 import type { CadenceResult } from "@/lib/types";
+
+export async function searchStops(query: string): Promise<string[]> {
+  return searchStopNames(query);
+}
 
 export async function queryTripCadence(
   stopNameA: string,

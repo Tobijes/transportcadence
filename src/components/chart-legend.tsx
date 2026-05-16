@@ -12,6 +12,10 @@ export function ChartLegend() {
           <span className="text-xs text-muted-foreground">{MODE_CONFIG[key].label}</span>
         </div>
       ))}
+      <div className="flex items-center gap-1.5">
+        <span className="inline-block h-3 w-3 rounded-sm opacity-30" style={{ background: "hsl(var(--foreground))" }} />
+        <span className="text-xs text-muted-foreground">Median ventetid (min)</span>
+      </div>
     </div>
   );
 }

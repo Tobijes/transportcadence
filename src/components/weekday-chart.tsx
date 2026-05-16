@@ -1,11 +1,10 @@
 "use client";
 
 import {
-  BarChart,
+  ComposedChart,
   Bar,
   XAxis,
   YAxis,
-  Tooltip,
   ResponsiveContainer,
 } from "recharts";
 import { MODE_CONFIG, MODE_KEYS } from "@/lib/route-types";
@@ -16,9 +15,7 @@ interface WeekdayChartProps {
   data: HourBucket[];
 }
 
-const HOUR_LABELS = Array.from({ length: 24 }, (_, i) =>
-  i % 3 === 0 ? String(i).padStart(2, "0") : ""
-);
+const ALL_HOURS = Array.from({ length: 24 }, (_, i) => i);
 
 export function WeekdayChart({ day, data }: WeekdayChartProps) {
   const hasData = data.some((b) => MODE_KEYS.some((k) => b[k] > 0));
@@ -27,34 +24,33 @@ export function WeekdayChart({ day, data }: WeekdayChartProps) {
     <div className="rounded-lg border bg-card p-4">
       <h3 className="mb-3 text-sm font-semibold text-card-foreground">{day}</h3>
       {hasData ? (
-        <ResponsiveContainer width="100%" height={120}>
-          <BarChart data={data} margin={{ top: 0, right: 0, bottom: 0, left: -20 }} barCategoryGap="10%">
+        <ResponsiveContainer width="100%" height={150}>
+          <ComposedChart data={data} margin={{ top: 0, right: 40, bottom: 20, left: 0 }} barCategoryGap="2%" barGap={-4}>
             <XAxis
               dataKey="hour"
+              ticks={ALL_HOURS}
               tickLine={false}
               axisLine={false}
-              tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
-              tickFormatter={(v) => HOUR_LABELS[v] ?? ""}
+              tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }}
+              tickFormatter={(v) => String(v)}
+              label={{ value: "Time", position: "insideBottom", offset: -10, style: { fontSize: 13, fill: "hsl(var(--muted-foreground))", textAnchor: "middle" } }}
             />
             <YAxis
+              yAxisId="left"
               tickLine={false}
               axisLine={false}
-              tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
+              tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }}
               allowDecimals={false}
+              label={{ value: "Afgange/time", angle: -90, position: "insideLeft", offset: 15, style: { fontSize: 12, fill: "hsl(var(--muted-foreground))", textAnchor: "middle" } }}
             />
-            <Tooltip
-              contentStyle={{
-                background: "hsl(var(--popover))",
-                border: "1px solid hsl(var(--border))",
-                borderRadius: "6px",
-                fontSize: 12,
-                color: "hsl(var(--popover-foreground))",
-              }}
-              formatter={(value: number, name: string) => [
-                value.toFixed(1),
-                MODE_CONFIG[name as keyof typeof MODE_CONFIG]?.label ?? name,
-              ]}
-              labelFormatter={(label) => `Kl. ${String(label).padStart(2, "0")}:00`}
+            <YAxis
+              yAxisId="right"
+              orientation="right"
+              tickLine={false}
+              axisLine={false}
+              tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }}
+              allowDecimals={false}
+              label={{ value: "Ventetid (min)", angle: 90, position: "insideRight", offset: -5, style: { fontSize: 12, fill: "hsl(var(--muted-foreground))", textAnchor: "middle" } }}
             />
             {MODE_KEYS.map((key) => (
               <Bar
@@ -62,10 +58,17 @@ export function WeekdayChart({ day, data }: WeekdayChartProps) {
                 dataKey={key}
                 stackId="a"
                 fill={MODE_CONFIG[key].color}
-                maxBarSize={20}
+                yAxisId="left"
               />
             ))}
-          </BarChart>
+            <Bar
+              yAxisId="right"
+              dataKey="medianHeadway"
+              fill="hsl(var(--foreground))"
+              maxBarSize={6}
+              opacity={0.3}
+            />
+          </ComposedChart>
         </ResponsiveContainer>
       ) : (
         <div className="flex h-[120px] items-center justify-center">

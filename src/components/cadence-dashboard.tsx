@@ -18,11 +18,7 @@ const WEEKDAY_NAMES: Record<Weekday, string> = {
   6: "Søndag",
 };
 
-interface CadenceDashboardProps {
-  stopNames: string[];
-}
-
-export function CadenceDashboard({ stopNames }: CadenceDashboardProps) {
+export function CadenceDashboard() {
   const [stopA, setStopA] = React.useState("");
   const [stopB, setStopB] = React.useState("");
   const [data, setData] = React.useState<CadenceResult | null>(null);
@@ -49,8 +45,8 @@ export function CadenceDashboard({ stopNames }: CadenceDashboardProps) {
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-end gap-4">
-        <StopSelector label="Fra" value={stopA} onChange={setStopA} stopNames={stopNames} />
-        <StopSelector label="Til" value={stopB} onChange={setStopB} stopNames={stopNames} />
+        <StopSelector label="Fra" value={stopA} onChange={setStopA} />
+        <StopSelector label="Til" value={stopB} onChange={setStopB} />
         <Button onClick={handleSearch} disabled={!canSearch} className="self-end">
           {loading ? "Søger..." : "Vis kadence"}
         </Button>
@@ -68,7 +64,7 @@ export function CadenceDashboard({ stopNames }: CadenceDashboardProps) {
             </p>
             <ChartLegend />
           </div>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="flex flex-col gap-4">
             {([0, 1, 2, 3, 4, 5, 6] as Weekday[]).map((wd) => (
               <WeekdayChart key={wd} day={WEEKDAY_NAMES[wd]} data={data[wd]} />
             ))}
