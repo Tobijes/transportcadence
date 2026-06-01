@@ -115,7 +115,7 @@ export function CadenceDashboard() {
                 </PopoverContent>
               </Popover>
             </div>
-            <ChartLegend />
+            <ChartLegend cadence={data.cadence} />
           </div>
           <div className="flex flex-col gap-4">
             {([0, 1, 2, 3, 4, 5, 6] as Weekday[]).map((wd) => (
