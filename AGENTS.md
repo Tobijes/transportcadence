@@ -31,6 +31,20 @@ Mode colours are hard-coded in `src/lib/route-types.ts` (`MODE_CONFIG`), not the
 ## Project Structure
 
 ```
+.github/
+  workflows/
+    docker-publish.yml    -- Builds and pushes the Dockerfile to GitHub Container
+                            Registry. Triggers: push to any branch, `v*` tags,
+                            manual dispatch. Computes the tag in a bash step:
+                              - `v*` tag push → image:<ref> + image:latest
+                              - push to main  → image:<semVer> + image:latest
+                                (semVer from GitVersion, run only on main/tag)
+                              - other branch push → image:<normalized-branch>
+                                (lowercased, non-[a-z0-9._-] → `-`, leading
+                                `-`/`.` stripped, ≤128 chars; falls back to
+                                `branch` if empty)
+                            No `pull_request` trigger — every PR commit already
+                            produces an image via the source branch's push event.
 scripts/
   ingest.ts               -- GTFS ingestion pipeline (schema → load → per-table .ts hooks
                             → indexes → derived tables + .ts hooks). Cleans WAL files
@@ -225,34 +239,6 @@ Plus indexes created by derived-table definitions (notably `idx_reachable_pairs_
 - `stop_id` is already station-level for rail (e.g., "København H" = `000008600626`) and platform/stop-level for buses. No platform explosion in BFS.
 
 ## UI
-
-### Layout
-
-```
-┌─────────────────────────────────────────────────────┐
-│  Transport Kadence                                   │
-│  Hvor ofte kan du komme fra A til B …               │
-│                                                      │
-│  Fra [_____________▼]  ⇄  Til [_____________▼]      │
-│                              Skift [0] [1] [2] [3]   │
-│                                                      │
-│  Ruter fra A til B med op til 1 skift:              │
-│  ┌────────────────────────────────────────────────┐  │
-│  │ A [IC] → B                                     │  │
-│  │ A [B] → C [RE] → B                             │  │
-│  │ A [IC] → D · (footprints) · D' [B] → B         │  │
-│  └────────────────────────────────────────────────┘  │
-│  ⓘ Click a leg to see cadence                        │
-│                                                      │
-│  Gennemsnitlige afgange pr. time fra C mod B  ⓘ     │
-│  ● Bus ● Tog ● S-tog ● Metro ● Letbane ● Færge      │
-│  ● Median ventetid (min)                             │
-│                                                      │
-│  Mandag     Tirsdag    Onsdag                        │
-│  ▇▇▇▇▇▇▇▇▇  ▇▇▇▇▇▇▇▇▇  ▇▇▇▇▇▇▇▇▇                │
-│  ...                                                │
-└─────────────────────────────────────────────────────┘
-```
 
 ### Stop selector
 - Radix `Popover` + plain `<input>` (no `cmdk`).
