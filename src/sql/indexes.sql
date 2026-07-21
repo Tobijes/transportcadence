@@ -1,5 +1,6 @@
 CREATE INDEX idx_stops_name ON stops(stop_name);
 CREATE INDEX idx_stops_name_lower ON stops(stop_name_lower);
+CREATE INDEX idx_stops_lat_lon ON stops(stop_lat, stop_lon);
 CREATE INDEX idx_stop_times_stop_id ON stop_times(stop_id);
 CREATE INDEX idx_stop_times_stop_trip_seq ON stop_times(stop_id, trip_id, stop_sequence, departure_time);
 CREATE INDEX idx_stop_times_trip_id ON stop_times(trip_id);

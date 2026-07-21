@@ -1,9 +1,10 @@
 "use server";
 
-import { getStopIdsByProximity, searchStopNames } from "@/lib/stops";
+import { getStopIdsByProximity, getStopName, searchStopNames } from "@/lib/stops";
 import { queryCadence } from "@/lib/queries";
+import { findRoutes as findRoutesImpl } from "@/lib/routing";
 import { getDb } from "@/lib/db";
-import type { CadenceQueryResult } from "@/lib/types";
+import type { CadenceQueryResult, FindRoutesResult } from "@/lib/types";
 
 export async function searchStops(query: string): Promise<string[]> {
   return searchStopNames(query);
@@ -30,3 +31,31 @@ export async function queryTripCadence(
   const toStops = stopNamesForIds(stopIdsB);
   return { cadence, meta: { fromStops, toStops } };
 }
+
+// Multi-transfer route finder. Returns all unique full routes (by stop_name sequence)
+// from originName to destName with at most maxTransfers transfers. Walk transfers
+// (250m proximity or transfers.txt edges) are free and don't count toward the budget.
+export async function findRoutes(
+  originName: string,
+  destName: string,
+  maxTransfers: number
+): Promise<FindRoutesResult> {
+  return findRoutesImpl(originName, destName, maxTransfers);
+}
+
+// Per-leg cadence: queries direct-trip cadence for a single leg (board → alight).
+// Reuses the existing queryCadence() with the 250m proximity cluster of each stop_id.
+export async function queryLegCadence(
+  fromStopId: string,
+  toStopId: string
+): Promise<CadenceQueryResult> {
+  const fromName = getStopName(fromStopId) ?? "";
+  const toName = getStopName(toStopId) ?? "";
+  const stopIdsA = getStopIdsByProximity(fromName);
+  const stopIdsB = getStopIdsByProximity(toName);
+  const cadence = queryCadence(stopIdsA, stopIdsB);
+  const fromStops = stopNamesForIds(stopIdsA);
+  const toStops = stopNamesForIds(stopIdsB);
+  return { cadence, meta: { fromStops, toStops } };
+}
+

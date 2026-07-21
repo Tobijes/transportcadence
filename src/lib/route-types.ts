@@ -17,11 +17,11 @@ export function normalizeRouteType(routeType: number): ModeKey {
 
 export const MODE_CONFIG: Record<ModeKey, { label: string; color: string }> = {
   bus:   { label: "Bus",     color: "hsl(45, 80%, 60%)" },
-  stog:  { label: "S-tog",   color: "hsl(15, 70%, 50%)" },
-  rail:  { label: "Tog",     color: "hsl(0, 80%, 55%)" },
-  metro: { label: "Metro",   color: "hsl(200, 60%, 50%)" },
+  stog:  { label: "S-tog",   color: "hsl(29, 87%, 44%)" },
+  rail:  { label: "Tog",     color: "hsl(200, 60%, 50%)" },
+  metro: { label: "Metro",   color: "hsl(0, 80%, 55%)" },
   tram:  { label: "Letbane", color: "hsl(130, 50%, 45%)" },
-  ferry: { label: "Færge",   color: "hsl(220, 70%, 55%)" },
+  ferry: { label: "Færge",   color: "hsl(0, 0%, 41%)" },
 };
 
 export const MODE_KEYS: ModeKey[] = ["bus", "stog", "rail", "metro", "tram", "ferry"];

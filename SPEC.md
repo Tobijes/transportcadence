@@ -4,7 +4,7 @@
 
 **Transport Cadence** is a website that answers the question: _"How often can I get from stop A to stop B?"_
 
-Users select two public transport stops and see a grid of 7 bar charts — one per weekday (Monday–Sunday) — showing the average number of trips available per hour of the day. Bars are stacked and colour-coded by transport mode (Bus, Rail, Metro, etc.).
+Users select an origin and destination, plus a maximum number of transfers (0-3). The app finds all unique full routes (A → B → C → ...) using breadth-first search over the GTFS stop graph, and lists them in the UI. The user can click any individual leg (e.g. B → C) to see a grid of 7 bar charts — one per weekday (Monday–Sunday) — showing the average number of trips available per hour of the day for that leg. Bars are stacked and colour-coded by transport mode (Bus, Rail, Metro, etc.).
 
 The dataset is the Danish national transit schedule from [Rejseplanen](https://www.rejseplanen.dk/), distributed in [GTFS format](https://gtfs.org/documentation/schedule/reference/).
 
@@ -33,14 +33,20 @@ A TypeScript ingestion script (`scripts/ingest.ts`) reads the zip, parses each C
 
 **Skipped**: `shapes.txt` (geometries, 113 MB, not needed), `frequencies.txt` (empty in this dataset), `attributions.txt`
 
+### Derived Tables (built at ingest time)
+- `service_dates(service_id, date, weekday)` — fully expanded active dates per service_id (one row per date the service is active, with weekday 0=Mon..6=Sun). Built from `calendar` + `calendar_dates` in TypeScript.
+- `reachable_pairs(board_id, alight_id)` — precomputed distinct stop pairs where a single trip carries passengers from board to alight. Primary key `(board_id, alight_id)`, indexed on `alight_id`. ~1.08M rows, ~50s build time. The BFS queries this table in ~50ms per wave instead of self-joining `stop_times` (~12s).
+
 ### Indexes
-- `stops(stop_name)` — fast name-to-IDs lookup
-- `stop_times(stop_id, trip_id, stop_sequence, departure_time)` — core query index (direct trips, leg1 scoping)
-- `stop_times(trip_id, stop_sequence, stop_id)` — fast trip-scoped stop lookup (step 2 of transfer query)
+- `stops(stop_name)`, `stops(stop_name_lower)` — fast name-to-IDs lookup
+- `stops(stop_lat, stop_lon)` — fast 250m proximity bounding-box scan (used by walkExpand in BFS)
+- `stop_times(stop_id, trip_id, stop_sequence, departure_time)` — core query index (direct trips)
+- `stop_times(trip_id, stop_sequence, stop_id)` — fast trip-scoped stop lookup
 - `stop_times(trip_id)` — trip-level lookups
 - `trips(route_id)`, `trips(service_id)`
 - `transfers(from_stop_id)`, `transfers(to_stop_id)`
 - `calendar_dates(service_id, date)`
+- `reachable_pairs(alight_id)` — fast last-wave BFS lookup
 
 ### Performance Settings
 `PRAGMA journal_mode = WAL; PRAGMA synchronous = OFF;` during bulk load. Indexes created after all inserts. Batch size: 10,000 rows per transaction.
@@ -76,20 +82,34 @@ transportcadence/
 │   │   ├── page.tsx               Main page (Server Component)
 │   │   ├── globals.css            Tailwind directives + theme import
 │   │   └── actions/
-│   │       └── query-trips.ts     Server Action — runs trip cadence query
+│   │       └── query-trips.ts     Server Actions: findRoutes, queryLegCadence, searchStops
 │   ├── components/
-│   │   ├── cadence-dashboard.tsx  Client state orchestrator
+│   │   ├── cadence-dashboard.tsx  Client orchestrator: stop + transfer selectors, route list, leg cadence
 │   │   ├── stop-selector.tsx      Searchable combobox for stops
+│   │   ├── transfers-selector.tsx 4-button group (0-3 transfers)
+│   │   ├── route-list.tsx         Renders found routes as clickable legs (A → B → C)
 │   │   ├── weekday-chart.tsx      Single day stacked bar chart
 │   │   ├── chart-legend.tsx       Transport mode colour legend
 │   │   └── ui/                    Shadcn auto-generated components
 │   ├── lib/
 │   │   ├── db.ts                  SQLite singleton
-│   │   ├── queries.ts             SQL query functions
-│   │   ├── stops.ts               Stop name grouping
+│   │   ├── queries.ts             queryCadence() — direct trips + headways
+│   │   ├── routing.ts              findRoutes() — BFS over stop_ids with walk-transfer expansion
+│   │   ├── stops.ts               Stop name search, proximity expansion, transfer lookup
 │   │   ├── route-types.ts         Mode labels, colours, normalisation
-│   │   └── types.ts               Shared TypeScript types
+│   │   └── types.ts               Shared TypeScript types (Leg, Route, FindRoutesResult, etc.)
 │   └── theme.css                  Shadcn theme CSS variables
+└── src/sql/
+    ├── indexes.sql                All CREATE INDEX statements
+    ├── tables/                    Raw GTFS tables (one .sql + optional .ts hook per table)
+    ├── derived_tables/
+    │   ├── service_dates.sql/.ts  Precomputed calendar expansion
+    │   └── reachable_pairs.sql/.ts Precomputed distinct (board_id, alight_id) pairs for BFS
+    └── queries/                   SQL templates with placeholder substitution
+        ├── direct_trips.sql       Direct A→B trip counts by hour/mode/service
+        ├── departures.sql          Departure times for headway computation
+        ├── leg_destinations.sql    All (board, alight) pairs reachable from boarding stops
+        └── leg_destinations_to_dest_single.sql  Board stops that reach a single dest stop
 ```
 
 ---
@@ -100,21 +120,27 @@ transportcadence/
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  Transport Cadence                                   │
+│  Transport Kadence                                   │
 │                                                      │
-│  From [__________________________▼]                  │
-│  To   [__________________________▼]  [Search]        │
+│  Fra [__________________________▼]                  │
+│  Til [__________________________▼]                   │
+│  Skift [0] [1] [2] [3]                              │
 │                                                      │
-│  ● Bus  ● S-train  ● Rail  ● Metro  ● Tram  ● Ferry │
+│  Ruter fra A til B med op til 1 skift:              │
+│  ┌────────────────────────────────────────────────┐ │
+│  │ A [IC] → B                                     │ │
+│  │ A [B] → C [RE] → B                             │ │
+│  │ A [IC] → D · (walk) D' [B] → B                 │ │
+│  └────────────────────────────────────────────────┘ │
 │                                                      │
-│  Monday          Tuesday         Wednesday           │
-│  ▇▇▇▇▇▇▇▇▇▇▇▇   ▇▇▇▇▇▇▇▇▇▇▇▇   ▇▇▇▇▇▇▇▇▇▇▇▇        │
+│  [Click a leg to see cadence]                       │
 │                                                      │
-│  Thursday        Friday          Saturday            │
-│  ▇▇▇▇▇▇▇▇▇▇▇▇   ▇▇▇▇▇▇▇▇▇▇▇▇   ▇▇▇▇▇▇▇▇▇▇▇▇        │
+│  Gennemsnitlige afgange pr. time fra C mod B        │
+│  ● Bus  ● S-tog  ● Tog  ● Metro  ● Letbane  ● Færge│
 │                                                      │
-│  Sunday                                              │
-│  ▇▇▇▇▇▇▇▇▇▇▇▇                                       │
+│  Mandag         Tirsdag        Onsdag               │
+│  ▇▇▇▇▇▇▇▇▇▇▇   ▇▇▇▇▇▇▇▇▇▇▇   ▇▇▇▇▇▇▇▇▇▇▇          │
+│  ...                                                 │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -123,6 +149,18 @@ transportcadence/
 - Searches across ~22,000 unique stop names
 - Stops with the same `stop_name` are grouped — all matching `stop_id` values are queried together
 - Clears on new search
+
+### Transfers Selector
+- 4-button group: 0, 1, 2, 3 transfers (default: 1)
+- Label: "Skift" (Danish for "transfers/changes")
+- Re-triggers route search on change
+
+### Route List
+- Renders all unique routes found as clickable leg sequences (A → B → C)
+- Each leg shows coloured badges for the `route_short_name`(s) of the routes serving it (e.g. `IC`, `B`, `6 A`). Badge background colour matches the transport mode colour used in the plot legend.
+- Walk transfers between different-name stops shown with a footprints icon
+- Walk transfers between same-name stops (intra-station platform walk) collapsed — no icon shown
+- Clicking a leg (e.g. B→C) loads the per-leg cadence in the chart area
 
 ### Bar Charts (7 total — one per weekday)
 - X-axis: hours 0–23
@@ -146,30 +184,41 @@ transportcadence/
 ## Query Logic
 
 ### Stop Grouping
-Multiple `stop_id` values sharing the same `stop_name` are treated as one logical stop. Example: "Nørreport St." has several platform entries — all are queried together.
+Multiple `stop_id` values sharing the same `stop_name` are treated as one logical stop. Example: "Nørreport St." has several platform entries — all are queried together. The proximity cluster (250m bounding box around the anchor stop) is also always-on, so selecting "København H" also picks up "København H (Metro)".
 
-### Trip Counting
+### Multi-transfer Routing (BFS)
 
-**Direct trips**: A single vehicle journey (`trip_id`) visits stop A before stop B (determined by `stop_sequence`). Counted once per such trip.
+`findRoutes(originName, destName, maxTransfers)` in `src/lib/routing.ts` finds all unique full routes from origin to destination with at most `maxTransfers` trip-to-trip transfers. It uses breadth-first search over `stop_id` (the unambiguous unique identifier for stops in the Denmark GTFS — rail stations like "København H" are a single `stop_id`, while bus stops with the same name are correctly distinguished).
 
-**Transfer trips (1 transfer)**: A journey on trip 1 reaches a transfer stop, then trip 2 departs from a connected transfer stop and reaches stop B. Valid transfers must satisfy:
+**BFS design**:
+- **Node**: a `stop_id`. The Denmark GTFS has no `parent_station` hierarchy (all stops have `location_type=0`), so `stop_id` is the natural granularity.
+- **Route uniqueness**: by `stop_name` sequence (via `routeNameKey()`). The BFS explores `stop_id`s for unambiguous graph traversal, but two routes are considered identical iff they have the same sequence of stop_NAMES. This collapses routes that differ only in platform-level `stop_id`s at the same station — e.g., "Roskilde St. (Stationscentret)" has 10 `stop_id`s; without name-based dedup the BFS would emit 10+ visually identical routes.
+- **Wave**: one BFS level = one leg of the journey. Wave 0 finds all 1-leg routes (0 transfers). Wave N finds all (N+1)-leg routes (N transfers).
+- **Transfer counting**: `transfers = legs.length - 1`. A path is extended only if `newLegs.length <= maxTransfers`.
+- **Cycle prevention**: no `stop_id` may appear twice in a path's visited set.
 
-```
-departure_time(leg2) ≥ arrival_time(leg1) + min_transfer_time
-```
+**Walk transfers (free, don't count toward max_transfers)**: When alighting at stop X, the passenger can walk to any stop in `walkExpand(X)` before boarding the next trip:
+1. X itself (no walk — board at the same stop)
+2. All stops within the 250m bounding box of X (`getStopIdsByProximityOfStopId`)
+3. All `to_stop_id` values from `transfers` where `from_stop_id = X` (`getTransferStopIds`)
 
-Only 1-transfer journeys are counted (not 2+).
+The walk is free — only the trip switch counts as a transfer.
 
-#### Transfer Query Algorithm (4 steps)
+**Performance optimizations**:
+1. **Precomputed `reachable_pairs` table** — built at ingest time (~50s for ~1.08M distinct pairs). The BFS queries this table instead of self-joining `stop_times` (4.8M rows). 240x faster: ~50ms vs ~12s for 2500 boarding stops.
+2. **Last-wave filtered query** (`leg_destinations_to_dest_single.sql`) — in the last BFS wave, we can't extend further, so we only need pairs where `alight_id` is in the destination set. Iterates over `destStopIds` (typically ~10) one at a time — for each, queries `reachable_pairs WHERE alight_id = ?` (indexed). ~30x faster than a large IN clause.
+3. **Destination-directed pruning** — before the BFS, computes `destReachable1Leg` = set of stop_ids that can reach any destStopId in exactly 1 leg. In the last intermediate wave (wave == maxTransfers - 1), only extends paths whose `walkExpand(currentAlightId)` intersects this set. Prevents the BFS from exploring stops that can't possibly reach the destination.
+4. **`idx_stops_lat_lon` index** — makes `walkExpand()`'s proximity queries 100x faster (index range scan vs full table scan of 37K rows).
 
-A naïve CTE join over 4.86M rows is too slow (~107s). Instead the query is broken into scoped steps:
+**Time budget**: 15-second wall-clock. If exceeded, returns partial results with `truncated: true`; the UI shows an amber warning. Typical performance: max_transfers=0 (<100ms), max_transfers=1 (100ms-4s), max_transfers=2 (2-6s), max_transfers=3 (5-15s, may truncate).
 
-1. **Find `to_stop_id`s reachable from A** — join `stop_times` for A-group trips with `transfers` to get all possible transfer destination stops (~100ms).
-2. **Scope to trips that visit B** — fetch all `trip_id`s visiting B-group stops, then find which of the step-1 `to_stop_id`s appear in those trips. Avoids scanning all of `stop_times` against 1000 candidate stops (~100ms).
-3. **Resolve `from_stop_id`s** — look up which `from_stop_id`s in `transfers` point to the validated `to_stop_id`s.
-4. **Full timed CTE query** — run leg1/leg2 join scoped to the exact small sets of `from_stop_id`s and `to_stop_id`s, with transfer time feasibility check.
+### Per-leg Cadence
 
-Total transfer query time: ~300–500ms vs. 107s previously.
+When the user clicks a leg in the route list, `queryLegCadence(fromStopId, toStopId)` resolves the stop names and calls the existing `queryCadence()` with the 250m proximity clusters. The same 7 `WeekdayChart`s are reused for the selected leg.
+
+### Direct Trip Counting (used by queryCadence)
+
+**Direct trips**: A single vehicle journey (`trip_id`) visits stop A before stop B (determined by `stop_sequence`). Counted once per such trip using `COUNT(DISTINCT st_a.trip_id)` to avoid overcounting when proximity expansion matches multiple stops per trip.
 
 ### Hour Bucketing
 Hours are extracted from `departure_time` at stop A using `CAST(SUBSTR(departure_time, 1, 2) AS INTEGER) % 24`. This correctly handles times past midnight (e.g. `25:10:00 → hour 1`).
@@ -196,8 +245,12 @@ Trip counts are then divided by the number of active dates for that weekday, giv
 
 ## Server Architecture
 
-- `page.tsx` (Server Component) queries stop names from SQLite on initial page load, passes them to the client dashboard as a prop — no API round trip needed for the dropdown data.
-- `query-trips.ts` (Server Action) is called when the user clicks Search. It runs the direct + transfer queries, applies averaging, and returns structured chart data to the client.
+- `page.tsx` (Server Component) renders the page shell and passes nothing to the client dashboard — stop names are loaded on-demand via the `searchStops` Server Action as the user types.
+- `query-trips.ts` (Server Actions):
+  - `searchStops(query)` — stop name search (called as user types in the combobox)
+  - `findRoutes(originName, destName, maxTransfers)` — BFS route finder (called on origin/dest/transfer-count change)
+  - `queryLegCadence(fromStopId, toStopId)` — per-leg cadence (called when user clicks a leg)
+  - `queryTripCadence(stopNameA, stopNameB)` — legacy direct A→B cadence (used internally by `queryLegCadence`)
 - The SQLite connection is a module-level singleton (`db.ts`) — re-used across requests within the same Node.js process.
 
 ---
