@@ -1,61 +1,108 @@
 # Agent behaviour
+
 Always remember to update this document (AGENTS.md) when
 - Adding or modifying business rules
 - New technical details that aren't clear from the code
 - When a file is added or modified, make sure to update `Project Structure` tree
 
+# Transport Cadence
+
+**Transport Kadence** answers the question: _"How often can I get from stop A to stop B?"_ using Danish public transit data.
+
+Users select an origin and destination stop and a maximum number of transfers (0–3). The app finds all unique full routes (A → B → C → …) using breadth-first search over the GTFS stop graph and lists them in the UI. The user can click any individual leg (e.g. B → C) to see a grid of 7 bar charts — one per weekday (Monday–Sunday) — showing the **average number of trips per hour** and the **median headway (waiting time)** for that leg. Bars are stacked and colour-coded by transport mode (Bus, Tog, S-tog, Metro, Letbane, Færge).
+
+The dataset is the Danish national transit schedule from [Rejseplanen](https://www.rejseplanen.dk/), distributed in [GTFS format](https://gtfs.org/documentation/schedule/reference/).
+
+## Stack
+
+| Layer        | Technology                                                          |
+|--------------|---------------------------------------------------------------------|
+| Framework    | Next.js (App Router)                                                |
+| Language     | TypeScript                                                          |
+| UI Library   | React 19                                                            |
+| Styling      | Tailwind CSS v4 + Shadcn UI primitives (Radix Popover)              |
+| Theme        | Warm orange/amber palette defined inline in `src/app/globals.css`    |
+| Database     | `node:sqlite` (Node.js 22+ built-in, read-only at runtime)          |
+| Charts       | Recharts `ComposedChart`                                            |
+| Combobox     | Radix Popover + plain `<input>` (no cmdk)                           |
+
+Mode colours are hard-coded in `src/lib/route-types.ts` (`MODE_CONFIG`), not the theme.
+
 ## Project Structure
 
 ```
 scripts/
-  ingest.ts               -- GTFS ingestion pipeline (schema → load → per-table .ts hooks → indexes → derived tables + .ts hooks)
+  ingest.ts               -- GTFS ingestion pipeline (schema → load → per-table .ts hooks
+                            → indexes → derived tables + .ts hooks). Cleans WAL files
+                            first. Output: dataset/gtfs.db
 src/
   app/
     actions/
       query-trips.ts      -- Server Actions: searchStops, findRoutes, queryLegCadence.
-    |                        queryTripCadence (legacy direct A→B, still used by queryLegCadence internally).
-    layout.tsx
-    page.tsx              -- SSR entry: fetches all stop names, passes to CadenceDashboard
+                            queryTripCadence (legacy direct A→B, still used by
+                            queryLegCadence internally).
+    api/
+      healthz/route.ts    -- GET /api/healthz → "ok" (used by the deploy platform)
+    layout.tsx            -- Root layout: <html lang="da">, imports globals.css
+    page.tsx              -- SSR entry: renders <CadenceDashboard /> directly. Stop
+    |                        names are NOT pre-fetched here — they're loaded on-demand
+    |                        by the searchStops Server Action as the user types.
   components/
-    cadence-dashboard.tsx -- Client orchestrator: stop selectors + transfers selector,
-    |                        route list, per-leg cadence (7 WeekdayCharts).
+    cadence-dashboard.tsx -- Client orchestrator: stop selectors + swap button +
+    |                        transfers selector, route list, per-leg cadence (7
+    |                        WeekdayCharts). Recent-stop storage via localStorage.
     chart-legend.tsx      -- Color legend for transport modes + median headway swatch
     route-list.tsx        -- Renders found routes as clickable legs (A → B → C).
-    |                        Each leg shows coloured route badges (route_short_name on mode-coloured chip).
+    |                        Each leg shows coloured route badges (route_short_name
+    |                        on a mode-coloured chip with a Lucide mode icon).
     |                        Walk transfers between legs shown with a footprints icon.
-    stop-selector.tsx     -- Searchable combobox (Radix Popover, client-side filter)
+    |                        Same-stop transfer (same stop_id or same stop_name,
+    |                        i.e. intra-station platform switch) shown with
+    |                        ArrowRightLeft.
+    stop-selector.tsx     -- Searchable combobox (Radix Popover + plain input,
+    |                        client-side filter). Highlights matched substring.
+    |                        Shows "Seneste valg" (recent stops) from localStorage
+    |                        above search results. 250ms debounce on search.
     transfers-selector.tsx -- 4-button group (0, 1, 2, 3) for max transfer count.
-    weekday-chart.tsx     -- ComposedChart: stacked bars (trips/hour, left axis) + grouped bar
-    |                        (median headway in min, right axis). Both axes labelled.
+    weekday-chart.tsx     -- ComposedChart: stacked bars (trips/hour, left axis)
+    |                        + grouped bar (median headway in min, right axis).
+    |                        Both axes labelled. Hours 0–23. Empty state when no data.
     ui/                   -- Shadcn primitives (button, popover)
   lib/
-    db.ts                 -- SQLite singleton (node:sqlite)
+    db.ts                 -- SQLite singleton (node:sqlite, readOnly:true)
     queries.ts            -- queryCadence(): queries direct_trips + departures + service_dates.
     |                        Computes per-weekday trip averages (weighted by active date count)
     |                        and median headways. Calendar expansion is precomputed in service_dates.
-    route-types.ts        -- GTFS route_type → ModeKey mapping, colors, labels
+    recent-stops.ts       -- localStorage-backed list of the last 3 stops selected in each
+                            selector (keyed by storageKey passed to StopSelector).
+    route-types.ts        -- GTFS route_type → ModeKey mapping, hard-coded HSL colors
+    |                      and Danish labels per mode.
     routing.ts            -- findRoutes(): BFS over stop_ids with walk-transfer expansion.
-    |                        Returns Route[] (each Route has legs + resolved stopNames).
-    |                        15s time budget; returns truncated=true if exceeded.
-    |                        Sort tiebreaker: min(tripCount) across legs (popularity > stand-still).
+    |                      Returns Route[] (each Route has legs + resolved stopNames).
+    |                      15s time budget; returns truncated=true if exceeded.
+    |                      Sort tiebreaker: min(tripCount) across legs (popularity > stand-still).
     stops.ts              -- searchStopNames(), getStopIdsByName(), getStopIdsByProximity(),
-    |                        getStopIdsByProximityOfStopId(), getTransferStopIds(), getStopName().
-    |                        searchStopNames() matches against stop_name_lower (Unicode-safe)
-    |                        getStopIdsByProximity() expands a stop name to all stops within 250m
-    |                        bounding box (purely geographic, no name filtering on result set)
+    |                      getStopIdsByProximityOfStopId(), getTransferStopIds(), getStopName().
+    |                      searchStopNames() matches against stop_name_lower (Unicode-safe),
+    |                      LEFT JOIN stop_times and ORDER BY trip count (popularity ranking),
+    |                      then filters out zone-boundary / leading-slash artifacts.
+    |                      getStopIdsByProximity() expands a stop name to all stops within
+    |                      250m bounding box (purely geographic, no name filtering on
+    |                      result set).
     types.ts              -- CadenceResult, HourBucket (includes medianHeadway), Weekday,
-    |                        Leg (includes routes: LegRoute[], tripCount?: number), LegRoute,
-    |                        Route, FindRoutesResult. tripCount is populated from pair_trip_counts
-    |                        by computeLegTripCounts() and used as a route-sort tiebreaker.
+    |                      Leg (includes routes: LegRoute[], tripCount?: number), LegRoute,
+    |                      Route, FindRoutesResult. tripCount is populated from pair_trip_counts
+    |                      by computeLegTripCounts() and used as a route-sort tiebreaker.
+    utils.ts              -- cn() helper (clsx + tailwind-merge)
   sql/
     indexes.sql           -- All index CREATE statements
     tables/               -- One .sql per raw GTFS table (agency, calendar, calendar_dates,
-    |                        routes, stops, trips, stop_times, transfers)
-    |                        A matching .ts file (e.g. stops.ts) can export a default
-    |                        postIngest(db: DatabaseSync) function; ingest.ts calls it
-    |                        automatically after loading that table's rows.
+    |                      routes, stops, trips, stop_times, transfers)
+    |                      A matching .ts file (e.g. stops.ts) can export a default
+    |                      postIngest(db: DatabaseSync) function; ingest.ts calls it
+    |                      automatically after loading that table's rows.
       stops.ts            -- Post-ingest hook: populates stop_name_lower using JS toLowerCase()
-      |                      (SQLite LOWER() is ASCII-only; this handles Æ, Ø, Å correctly)
+                            (SQLite LOWER() is ASCII-only; this handles Æ, Ø, Å correctly)
     derived_tables/
       reachable_pairs.sql  -- Precomputed distinct (board_id, alight_id) pairs: one row per
       |                      stop pair where a single trip carries passengers from board to alight.
@@ -63,7 +110,7 @@ src/
       |                      Built at ingest (~50s for ~1.08M pairs). The BFS queries this
       |                      table in ~50ms per wave instead of self-joining stop_times (~12s).
       reachable_pairs.ts   -- Post-ingest hook: INSERT INTO reachable_pairs SELECT DISTINCT ...
-      |                      from stop_times self-join.
+      |                      from stop_times self-join (with pickup_type=0, drop_off_type=0).
       reachable_pair_routes.sql -- Precomputed distinct (board_id, alight_id, route_short_name,
       |                      route_type) tuples: one row per stop pair + route that serves that
       |                      pair on some trip. Primary key (board_id, alight_id, route_short_name,
@@ -82,23 +129,166 @@ src/
       pair_trip_counts.ts   -- Post-ingest hook: GROUP BY (board_id, alight_id) over the same
                               stop_times self-join used for reachable_pairs, with COUNT(DISTINCT).
       service_dates.sql   -- Fully expanded active dates per service_id: one row per
-      |                      (service_id, date YYYYMMDD, weekday 0=Mon..6=Sun).
-      |                      Built at ingest via recursive CTE over calendar + calendar_dates.
+      |                    (service_id, date YYYYMMDD, weekday 0=Mon..6=Sun).
+      |                    Index on weekday. Built at ingest via TypeScript loop over calendar +
+      |                    calendar_dates (calendar expansion requires date arithmetic).
       service_dates.ts    -- Post-ingest hook (default export postIngest): populates service_dates
-      |                      rows in TypeScript (calendar expansion requires date arithmetic)
+                            rows in TypeScript (calendar expansion requires date arithmetic)
     queries/              -- SQL query templates. Placeholders /*STOP_IDS_A*/, /*STOP_IDS_B*/,
-    |                        /*STOP_IDS*/, /*PAIRS*/ are substituted at runtime by loadSql() helpers.
+    |                      /*STOP_IDS*/, /*PAIRS*/ are substituted at runtime by loadSql() helpers.
       direct_trips.sql    -- Grouped trip counts by hour/mode/service. Uses COUNT(DISTINCT trip_id)
-      |                      to avoid overcounting when proximity expansion matches multiple stops per trip.
+      |                    to avoid overcounting when proximity expansion matches multiple stops per trip.
+      |                    Filters pickup_type=0 at board, drop_off_type=0 at alight.
       departures.sql      -- Individual departure times for headway computation. Groups by trip_id with
-      |                      MIN(departure_time) to deduplicate multi-platform matches.
+                            MIN(departure_time) to deduplicate multi-platform matches.
       leg_destinations.sql -- Distinct (board_id, alight_id) pairs reachable from a set of boarding
       |                      stops. Used by the BFS in routing.ts to expand one level per wave.
+      leg_destinations_to_dest_single.sql -- Distinct (board_id) values that can reach a single
+      |                      (alight_id) on one trip. Indexed lookup on alight_id (~30x faster
+      |                      than a large IN clause on board_id). Used by computeDestReachable1Leg
+      |                      for destination-directed pruning and by the last-wave BFS query.
       leg_routes.sql       -- Distinct (route_short_name, route_type) for a batch of (board_id, alight_id)
-                             leg pairs. Queries the precomputed reachable_pair_routes table. Used by
-                             routing.ts after the BFS to populate Leg.routes for the coloured route
-                             badges shown in route-list.tsx. Row-value IN clause, batched at 250 pairs.
+                            leg pairs. Queries the precomputed reachable_pair_routes table. Used by
+                            routing.ts after the BFS to populate Leg.routes for the coloured route
+                            badges shown in route-list.tsx. Row-value IN clause, batched at 250 pairs.
+      pair_trip_counts.sql  -- Trip counts for a batch of (board_id, alight_id) pairs from the
+                              precomputed pair_trip_counts table. Row-value IN clause, batched at 250.
 ```
+
+## Data Pipeline
+
+### Input
+- `GTFS.zip` (~59 MB) at the project root — standard GTFS `.txt` files.
+
+### Process
+`scripts/ingest.ts` reads the zip, parses each CSV via `csv-parse`, and loads it into
+`dataset/gtfs.db` via `node:sqlite`. It:
+1. Deletes any existing `gtfs.db` plus `-shm` / `-wal` files (avoids stale WAL errors).
+2. Extracts the zip to a temp dir.
+3. Applies the schema from `src/sql/tables/*.sql` (PRAGMAs first, then all tables).
+4. Inserts each table's rows in batches of **10 000** wrapped in a manual transaction.
+   Uses `INSERT OR IGNORE` so re-runs don't fail on duplicate PKs.
+5. For each table, if `src/sql/tables/<name>.ts` exports a default `postIngest(db)`,
+   calls it (currently only `stops.ts` uses this to populate `stop_name_lower`).
+6. Creates all indexes from `src/sql/indexes.sql`.
+7. Creates derived tables from `src/sql/derived_tables/*.sql`, calling each matching
+   `<name>.ts` post-ingest hook to populate them.
+8. Runs `ANALYZE`, `PRAGMA wal_checkpoint(TRUNCATE)`, switches `journal_mode` back to
+   `DELETE`, closes the DB, removes the temp dir.
+
+### Skipped GTFS files
+- `shapes.txt` (geometries, ~113 MB, not needed)
+- `frequencies.txt` (empty in the Denmark feed)
+- `attributions.txt`
+
+### Raw tables
+
+| Table            | Primary Key                       | Notes                          |
+|------------------|-----------------------------------|--------------------------------|
+| `agency`         | `agency_id` INTEGER               | Transit operators              |
+| `calendar`       | `service_id` INTEGER              | Weekly service patterns        |
+| `calendar_dates` | `(service_id, date)`              | Exceptions (holidays/additions)|
+| `routes`         | `route_id` TEXT                   | Lines with type and colour     |
+| `stops`          | `stop_id` TEXT (12-digit zero-pad)| All `location_type=0`          |
+| `trips`          | `trip_id` INTEGER                 | Individual vehicle journeys    |
+| `stop_times`     | `(trip_id, stop_sequence)`        | Core query table               |
+| `transfers`      | `(from_stop_id, to_stop_id)`      | Allowed interchange points     |
+
+### Performance settings during ingest
+- `PRAGMA journal_mode = WAL;` (then reverted to `DELETE` at the end)
+- `PRAGMA synchronous = OFF;`
+- `PRAGMA foreign_keys = OFF;` (re-enabled after derived tables are built)
+- Batch size: 10 000 rows per manual transaction.
+
+### Indexes (`src/sql/indexes.sql`)
+
+```
+idx_stops_name              stops(stop_name)
+idx_stops_name_lower        stops(stop_name_lower)        -- searchStopNames
+idx_stops_lat_lon           stops(stop_lat, stop_lon)     -- walkExpand proximity scan
+idx_stop_times_stop_id      stop_times(stop_id)
+idx_stop_times_stop_trip_seq stop_times(stop_id, trip_id, stop_sequence, departure_time)
+idx_stop_times_trip_id      stop_times(trip_id)
+idx_stop_times_trip_seq_stop stop_times(trip_id, stop_sequence, stop_id)
+idx_trips_route_id          trips(route_id)
+idx_trips_service_id        trips(service_id)
+idx_transfers_from          transfers(from_stop_id)
+idx_transfers_to            transfers(to_stop_id)
+idx_calendar_dates_service  calendar_dates(service_id, date)
+```
+Plus indexes created by derived-table definitions (notably `idx_reachable_pairs_alight` and `idx_service_dates_weekday`).
+
+### Data characteristics (Denmark GTFS)
+
+- 37 043 stops, all `location_type=0`, no `parent_station` populated.
+- `transfers` table: 60 788 entries, all `transfer_type=2`, all bidirectional.
+- `stop_id` is already station-level for rail (e.g., "København H" = `000008600626`) and platform/stop-level for buses. No platform explosion in BFS.
+
+## UI
+
+### Layout
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Transport Kadence                                   │
+│  Hvor ofte kan du komme fra A til B …               │
+│                                                      │
+│  Fra [_____________▼]  ⇄  Til [_____________▼]      │
+│                              Skift [0] [1] [2] [3]   │
+│                                                      │
+│  Ruter fra A til B med op til 1 skift:              │
+│  ┌────────────────────────────────────────────────┐  │
+│  │ A [IC] → B                                     │  │
+│  │ A [B] → C [RE] → B                             │  │
+│  │ A [IC] → D · (footprints) · D' [B] → B         │  │
+│  └────────────────────────────────────────────────┘  │
+│  ⓘ Click a leg to see cadence                        │
+│                                                      │
+│  Gennemsnitlige afgange pr. time fra C mod B  ⓘ     │
+│  ● Bus ● Tog ● S-tog ● Metro ● Letbane ● Færge      │
+│  ● Median ventetid (min)                             │
+│                                                      │
+│  Mandag     Tirsdag    Onsdag                        │
+│  ▇▇▇▇▇▇▇▇▇  ▇▇▇▇▇▇▇▇▇  ▇▇▇▇▇▇▇▇▇                │
+│  ...                                                │
+└─────────────────────────────────────────────────────┘
+```
+
+### Stop selector
+- Radix `Popover` + plain `<input>` (no `cmdk`).
+- `searchStops("")` is fetched eagerly on mount so the dropdown opens instantly.
+- 250 ms debounce while typing; results are ranked by trip count (popular stops first)
+  via `LEFT JOIN stop_times GROUP BY stop_id`.
+- Filters out zone-boundary markers (`/…`, `\d+/\d+ Zonegrænse …`).
+- Each selector persists up to 3 most-recently chosen stops to `localStorage` under
+  `recent-stops-<storageKey>` and renders them as a "Seneste valg" section above the
+  search results.
+- Matched substring is rendered in bold via `HighlightedName`.
+
+### Swap button
+- Between the two selectors: swaps `stopA` ↔ `stopB` and re-records both as recent.
+
+### Transfers selector
+- 4-button group `0 1 2 3` (default: **1**). Label: "Skift" (Danish for "transfers/changes").
+- Disabled while routes are loading.
+- Re-triggers the BFS on change.
+
+### Route list
+- Each route renders as a row of clickable leg buttons. A leg button shows
+  `fromName` + coloured `route_short_name` chip(s) + arrow + `toName`.
+- A `<Footprints>` icon separates legs whose `fromStopId` ≠ previous leg's `toStopId`
+  AND whose `fromName` ≠ previous leg's `toName` (real walk to a different-named stop).
+- A `<ArrowRightLeft>` icon separates legs whose `fromStopId` == previous `toStopId`
+  or whose `fromName` == previous `toName` (same station, same stop — no walk).
+- Clicking a leg sets `selectedLeg`, which triggers the per-leg cadence query.
+- If `truncated === true`, an amber banner "Søgningen blev afbrudt (tidsgrænse) …"
+  is shown above the list.
+
+### Per-leg cadence
+When a leg is clicked, `queryLegCadence(fromStopId, toStopId)` resolves stop names,
+expands both ends to their 250 m proximity clusters, and calls `queryCadence()`.
+The same 7 `WeekdayChart`s render the result. An `Info` popover next to the heading
+lists the actual `fromStops` and `toStops` included in the proximity expansion.
 
 ## Chart architecture
 
@@ -107,11 +297,33 @@ src/
 - **Right axis** ("Ventetid (min)"): grouped `Bar` for `medianHeadway` — median minutes between
   consecutive departures within each hour bucket, across all active dates for that weekday
 
-`medianHeadway` is `null` for hours with fewer than 2 departures on any active date; Recharts renders no bar for null data points.
+`medianHeadway` is `null` for hours with fewer than 2 departures on any active date; Recharts renders no bar for null data points. `ChartLegend` only shows the headway swatch if at least one bucket has a non-null headway.
+
+### Mode → colour mapping (`MODE_CONFIG` in `route-types.ts`)
+
+| Mode     | Label    | HSL              |
+|----------|----------|------------------|
+| bus      | Bus      | `hsl(45, 80%, 60%)` |
+| stog     | S-tog    | `hsl(29, 87%, 44%)` |
+| rail     | Tog      | `hsl(200, 60%, 50%)`|
+| metro    | Metro    | `hsl(0, 80%, 55%)`  |
+| tram     | Letbane  | `hsl(130, 50%, 45%)`|
+| ferry    | Færge    | `hsl(0, 0%, 41%)`   |
+
+### GTFS route_type → ModeKey
+| Raw codes | Mode    |
+|-----------|---------|
+| 3, 700, 715 | bus   |
+| 2         | rail   |
+| 109       | stog   |
+| 1         | metro  |
+| 0         | tram   |
+| 4         | ferry  |
+| anything else | bus (fallback in `normalizeRouteType`) |
 
 ## Headway computation
 
-`queryCadence()` runs a second SQL query (no GROUP BY) to get individual `departure_time` values. For each weekday, the TypeScript code expands departures per active calendar date (looked up from `service_dates`), sorts them within each hour bucket, computes consecutive gaps, then takes the median across all dates. GTFS times past midnight (e.g. "25:10:00") are normalized with `% 24` on the hour component before converting to minutes.
+`queryCadence()` runs a second SQL query (no GROUP BY on hour) to get individual `departure_time` values. For each weekday, the TypeScript code expands departures per active calendar date (looked up from `service_dates`), sorts them within each hour bucket, computes consecutive gaps, then takes the median across all dates. GTFS times past midnight (e.g. "25:10:00") are normalized with `% 24` on the hour component before converting to minutes.
 
 ## Stop proximity expansion
 
@@ -125,7 +337,12 @@ Both SQL queries use deduplication to handle the expanded stop sets:
 
 ## Calendar expansion
 
-Active service dates are precomputed into `service_dates` at ingest time (see `service_dates.sql`). `queryCadence()` queries this table directly instead of expanding date ranges in TypeScript at runtime. The ingest script (`scripts/ingest.ts`) also cleans up SQLite WAL files (`-shm`, `-wal`) before recreating the database to prevent stale file errors.
+Active service dates are precomputed into `service_dates` at ingest time (see `service_dates.sql` / `service_dates.ts`). `queryCadence()` queries this table directly instead of expanding date ranges in TypeScript at runtime. The ingest script (`scripts/ingest.ts`) also cleans up SQLite WAL files (`-shm`, `-wal`) before recreating the database to prevent stale file errors.
+
+`service_dates.ts` expands the calendar iteratively in TypeScript because the date
+arithmetic (`d.setDate(d.getDate() + 1)`) is easier than a recursive SQL CTE, and it
+correctly applies both calendar additions (`exception_type=1`) and removals
+(`exception_type=2`).
 
 ## Multi-transfer routing
 
@@ -208,8 +425,24 @@ After `computeLegRoutes()`, `computeLegTripCounts()` queries `pair_trip_counts.s
 
 When the user clicks a leg in the route list, `queryLegCadence(fromStopId, toStopId)` resolves the stop names and calls the existing `queryCadence()` with the 250m proximity clusters. The same 7 `WeekdayChart`s are reused for the selected leg.
 
-### Data characteristics (Denmark GTFS)
+## Server Actions
 
-- 37,043 stops, all `location_type=0`, no `parent_station` populated.
-- `transfers` table: 60,788 entries, all `transfer_type=2`, all bidirectional.
-- `stop_id` is already station-level for rail (e.g., "København H" = `000008600626`) and platform/stop-level for buses. No platform explosion in BFS.
+`src/app/actions/query-trips.ts` exposes:
+
+- `searchStops(query)` — stop name search (called as the user types, 250 ms debounced by the client).
+- `findRoutes(originName, destName, maxTransfers)` — BFS route finder (called on origin/dest/transfer-count change).
+- `queryLegCadence(fromStopId, toStopId)` — per-leg cadence (called when the user clicks a leg).
+- `queryTripCadence(stopNameA, stopNameB)` — legacy direct A→B cadence (used internally by `queryLegCadence`).
+
+The SQLite connection is a module-level singleton (`db.ts`) opened **read-only** and re-used across requests within the same Node.js process. `page.tsx` is a Server Component that simply renders `<CadenceDashboard />` — stop names are loaded on-demand via the `searchStops` Server Action as the user types.
+
+## Running locally
+
+```bash
+npm install
+npm run ingest   # builds dataset/gtfs.db (~5 min total)
+npm run dev      # http://localhost:3000
+```
+
+`GTFS.zip` must be at the project root before `npm run ingest`. The ingest always
+recreates `dataset/gtfs.db` from scratch — no incremental updates.
