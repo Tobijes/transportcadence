@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { ArrowRight, ArrowRightLeft, Bus, ChevronsDown, ChevronsUp, Footprints, Ship, Train, TrainFront, TramFront } from "lucide-react";
+import { ArrowRight, ArrowRightLeft, ChevronsDown, ChevronsUp, Footprints } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { MODE_CONFIG, normalizeRouteType } from "@/lib/route-types";
@@ -77,22 +77,18 @@ export function RouteList({ routes, selectedLeg, onSelectLeg, truncated }: Route
 function RouteBadge({ route }: { route: LegRoute }) {
   const mode = normalizeRouteType(route.routeType);
   const { color, label } = MODE_CONFIG[mode];
-  const ModeIcon =
-    mode === "bus"   ? Bus :
-    mode === "rail"  ? Train :
-    mode === "stog"  ? TrainFront :
-    mode === "metro" ? TrainFront :
-    mode === "tram"  ? TramFront :
-    mode === "ferry" ? Ship :
-    Bus;
   return (
     <span
-      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-semibold leading-none text-white whitespace-nowrap"
+      className="inline-flex flex-col items-center justify-center rounded px-1.5 py-0.5 text-[11px] font-semibold leading-tight text-white whitespace-nowrap"
       style={{ background: color }}
       title={label}
     >
-      <ModeIcon className="h-3 w-3" />
-      {route.shortName}
+      <span>{route.shortName}</span>
+      {route.meanTravelTime !== undefined && (
+        <span className="text-[9px] font-normal opacity-90">
+          {Math.ceil(route.meanTravelTime)} min
+        </span>
+      )}
     </span>
   );
 }

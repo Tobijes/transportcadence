@@ -253,6 +253,7 @@ function computeLegRoutes(legs: Leg[], deadline: number): Map<string, LegRoute[]
       alight_id: string;
       route_short_name: string;
       route_type: number;
+      mean_travel_time: number | null;
     }[];
     for (const r of rows) {
       const key = `${r.board_id}|${r.alight_id}`;
@@ -261,7 +262,13 @@ function computeLegRoutes(legs: Leg[], deadline: number): Map<string, LegRoute[]
         list = [];
         result.set(key, list);
       }
-      list.push({ shortName: r.route_short_name, routeType: r.route_type });
+      const meanTravelTime =
+        r.mean_travel_time !== null ? r.mean_travel_time : undefined;
+      list.push({
+        shortName: r.route_short_name,
+        routeType: r.route_type,
+        meanTravelTime,
+      });
     }
   }
   return result;

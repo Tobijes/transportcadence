@@ -37,6 +37,7 @@ export type CadenceQueryResult = {
 export interface LegRoute {
   shortName: string;
   routeType: number;
+  meanTravelTime?: number; // fractional minutes; UI rounds up (ceiling) before display
 }
 
 export interface Leg {

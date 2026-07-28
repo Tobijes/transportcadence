@@ -70,11 +70,11 @@ src/
     |                        Shows the first 5 routes initially; an expand button (centre-aligned
     |                        with a ChevronsDown/Up icon, label "Vis alle N ruter" / "Vis færre")
     |                        reveals the remaining routes when more than 5 are available. Each leg
-    |                        shows coloured route badges (route_short_name
-    |                        on a mode-coloured chip with a Lucide mode icon).
-    |                        Walk transfers between legs shown with a footprints icon.
-    |                        Same-stop transfer (same stop_id or same stop_name,
-    |                        i.e. intra-station platform switch) shown with
+    |                        shows coloured route badges (two-line: route_short_name on top, median
+    |                        travel time in integer minutes below — e.g. "12 min"). Mode colour
+    |                        is the only mode indicator (no icons). Walk transfers between legs
+    |                        shown with a footprints icon. Same-stop transfer (same stop_id or
+    |                        same stop_name, i.e. intra-station platform switch) shown with
     |                        ArrowRightLeft.
     stop-selector.tsx     -- Searchable combobox (Radix Popover + plain input,
     |                        client-side filter). Highlights matched substring.
@@ -110,7 +110,10 @@ src/
     |                      Leg (includes routes: LegRoute[], tripCount?: number), LegRoute,
     |                      Route, FindRoutesResult. tripCount is populated from the
     |                      trip_count column on reachable_pairs by computeLegTripCounts()
-    |                      and used as a route-sort tiebreaker.
+    |                      and used as a route-sort tiebreaker. LegRoute.meanTravelTime
+    |                      (fractional minutes) is populated from reachable_pair_routes by
+    |                      computeLegRoutes(); the UI rounds up (Math.ceil) to integer
+    |                      minutes before display beneath the short name in the badge.
     utils.ts              -- cn() helper (clsx + tailwind-merge)
   sql/
     indexes.sql           -- All index CREATE statements
@@ -133,15 +136,29 @@ src/
       reachable_pairs.ts   -- Post-ingest hook: GROUP BY (board_id, alight_id) over the stop_times
       |                      self-join (pickup_type=0, drop_off_type=0), with COUNT(DISTINCT trip_id).
       reachable_pair_routes.sql -- Precomputed distinct (board_id, alight_id, route_short_name,
-      |                      route_type) tuples: one row per stop pair + route that serves that
-      |                      pair on some trip. Primary key (board_id, alight_id, route_short_name,
-      |                      route_type) — the prefix (board_id, alight_id) serves as a covering
-      |                      index for forward lookups, no separate index needed. Built at ingest
-      |                      (~40s for ~1.35M rows). computeLegRoutes() queries this table in ~1ms
-      |                      per 250-pair batch instead of self-joining stop_times (~480ms per batch,
-      |                      ~18s total for 830 pairs — exceeds the 15s budget).
-      reachable_pair_routes.ts -- Post-ingest hook: INSERT INTO reachable_pair_routes SELECT DISTINCT
-      |                      from stop_times self-join + trips + routes.
+      |                      route_type, mean_travel_time) tuples: one row per stop pair + route
+      |                      that serves that pair on some trip. mean_travel_time is the mean
+      |                      (across all GTFS trips serving the pair on that route) of the travel
+      |                      time in fractional minutes — board departure → alight arrival. The UI
+      |                      rounds up (ceiling) to integer minutes for display. Used by routing.ts
+      |                      in computeLegRoutes() to populate LegRoute.meanTravelTime, displayed
+      |                      beneath the route short name in the badge. Primary key (board_id,
+      |                      alight_id, route_short_name, route_type) — the prefix (board_id,
+      |                      alight_id) serves as a covering index for forward lookups, no
+      |                      separate index needed. Built at ingest (~40s for ~1.35M rows).
+      |                      computeLegRoutes() queries this table in ~1ms per 250-pair batch
+      |                      instead of self-joining stop_times (~480ms per batch, ~18s total
+      |                      for 830 pairs — exceeds the 15s budget).
+      reachable_pair_routes.ts -- Post-ingest hook: INSERT INTO reachable_pair_routes via
+      |                      SELECT ... AVG(... travel_time ...) GROUP BY (board_id, alight_id,
+      |                      route_short_name, route_type) over the stop_times self-join +
+      |                      trips + routes. Travel time is parsed as HH:MM via INSTR(..., ':')
+      |                      so 1-digit hours (e.g. "4:01:00") are handled correctly;
+      |                      SUBSTR(... 1, 2) would have given "4:" → 4 minutes wrong because
+      |                      the minute field shifts by one. Source field is
+      |                      COALESCE(st_b.arrival_time, st_b.departure_time) minus the
+      |                      corresponding board time (no % 24, since trip times are monotonic
+      |                      and may exceed 24h).
       service_dates.sql   -- Fully expanded active dates per service_id: one row per
       |                    (service_id, date YYYYMMDD, weekday 0=Mon..6=Sun).
       |                    Index on weekday. Built at ingest via TypeScript loop over calendar +
@@ -161,10 +178,12 @@ src/
       |                      (alight_id) on one trip. Indexed lookup on alight_id (~30x faster
       |                      than a large IN clause on board_id). Used by computeDestReachable1Leg
       |                      for destination-directed pruning and by the last-wave BFS query.
-      leg_routes.sql       -- Distinct (route_short_name, route_type) for a batch of (board_id, alight_id)
-                            leg pairs. Queries the precomputed reachable_pair_routes table. Used by
-                            routing.ts after the BFS to populate Leg.routes for the coloured route
-                            badges shown in route-list.tsx. Row-value IN clause, batched at 250 pairs.
+      leg_routes.sql       -- Distinct (route_short_name, route_type, mean_travel_time) for a
+                            batch of (board_id, alight_id) leg pairs. Queries the precomputed
+                            reachable_pair_routes table. Used by routing.ts after the BFS to
+                            populate Leg.routes (shortName + routeType) and LegRoute.meanTravelTime
+                            for the coloured route badges shown in route-list.tsx. Row-value IN
+                            clause, batched at 250 pairs.
       pair_trip_counts.sql  -- Trip counts for a batch of (board_id, alight_id) pairs read from
                               the trip_count column of the precomputed reachable_pairs table.
                               Row-value IN clause, batched at 250.
@@ -403,7 +422,7 @@ raw BFS size.
 
 ### Per-leg route badges
 
-After the BFS, `computeLegRoutes()` queries distinct `(route_short_name, route_type)` pairs for each unique `(board_id, alight_id)` leg pair across all routes' legs, using `leg_routes.sql` against the precomputed `reachable_pair_routes` table (~1ms per 250-pair batch; self-joining `stop_times` was ~480ms/batch and ~18s total — exceeded the 15s budget). The result is attached to each `Leg.routes` (an array of `LegRoute`). The UI renders each entry as a small rounded coloured chip labelled with `route_short_name`; the chip background uses the same mode colour as the plot legend (`MODE_CONFIG[mode].color`). Computed once per unique pair, then assigned to every `Leg` instance sharing that pair. Batched at 250 pairs per query (row-value IN clause) to stay within SQLite parameter limits. If the time budget is exceeded mid-batch, `truncated=true` is returned and legs may have empty `routes` arrays.
+After the BFS, `computeLegRoutes()` queries distinct `(route_short_name, route_type, mean_travel_time)` tuples for each unique `(board_id, alight_id)` leg pair across all routes' legs, using `leg_routes.sql` against the precomputed `reachable_pair_routes` table (~1ms per 250-pair batch; self-joining `stop_times` was ~480ms/batch and ~18s total — exceeded the 15s budget). The result is attached to each `Leg.routes` (an array of `LegRoute`). The UI renders each entry as a small rounded two-line coloured chip: top line = `route_short_name`, bottom line = `Math.ceil(LegRoute.meanTravelTime)` in integer minutes (e.g. "12 min", only rendered when defined). The chip background uses the same mode colour as the plot legend (`MODE_CONFIG[mode].color`) — colour is the only mode indicator, no icons. Computed once per unique pair, then assigned to every `Leg` instance sharing that pair. Batched at 250 pairs per query (row-value IN clause) to stay within SQLite parameter limits. If the time budget is exceeded mid-batch, `truncated=true` is returned and legs may have empty `routes` arrays.
 
 ### Per-leg trip counts (sort tiebreaker)
 
