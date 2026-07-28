@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { ArrowRight, ArrowRightLeft, Bus, Footprints, Ship, Train, TrainFront, TramFront } from "lucide-react";
+import { ArrowRight, ArrowRightLeft, Bus, ChevronsDown, ChevronsUp, Footprints, Ship, Train, TrainFront, TramFront } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { MODE_CONFIG, normalizeRouteType } from "@/lib/route-types";
 import type { Leg, LegRoute, Route } from "@/lib/types";
@@ -13,7 +14,15 @@ interface RouteListProps {
   truncated?: boolean;
 }
 
+const COLLAPSED_ROUTE_COUNT = 5;
+
 export function RouteList({ routes, selectedLeg, onSelectLeg, truncated }: RouteListProps) {
+  const [expanded, setExpanded] = React.useState(false);
+
+  React.useEffect(() => {
+    setExpanded(false);
+  }, [routes]);
+
   if (routes.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
@@ -30,7 +39,7 @@ export function RouteList({ routes, selectedLeg, onSelectLeg, truncated }: Route
         </p>
       )}
       <div className="space-y-1.5">
-        {routes.map((route, routeIdx) => (
+        {(expanded ? routes : routes.slice(0, COLLAPSED_ROUTE_COUNT)).map((route, routeIdx) => (
           <RouteRow
             key={routeIdx}
             route={route}
@@ -39,6 +48,28 @@ export function RouteList({ routes, selectedLeg, onSelectLeg, truncated }: Route
           />
         ))}
       </div>
+      {routes.length > COLLAPSED_ROUTE_COUNT && (
+        <div className="flex justify-center">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setExpanded((current) => !current)}
+          >
+            {expanded ? (
+              <>
+                <ChevronsUp className="h-4 w-4" />
+                Vis færre
+              </>
+            ) : (
+              <>
+                <ChevronsDown className="h-4 w-4" />
+                Vis alle {routes.length} ruter
+              </>
+            )}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

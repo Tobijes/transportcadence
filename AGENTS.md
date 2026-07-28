@@ -67,7 +67,10 @@ src/
     |                        WeekdayCharts). Recent-stop storage via localStorage.
     chart-legend.tsx      -- Color legend for transport modes + median headway swatch
     route-list.tsx        -- Renders found routes as clickable legs (A → B → C).
-    |                        Each leg shows coloured route badges (route_short_name
+    |                        Shows the first 5 routes initially; an expand button (centre-aligned
+    |                        with a ChevronsDown/Up icon, label "Vis alle N ruter" / "Vis færre")
+    |                        reveals the remaining routes when more than 5 are available. Each leg
+    |                        shows coloured route badges (route_short_name
     |                        on a mode-coloured chip with a Lucide mode icon).
     |                        Walk transfers between legs shown with a footprints icon.
     |                        Same-stop transfer (same stop_id or same stop_name,
