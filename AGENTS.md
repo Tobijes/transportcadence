@@ -105,8 +105,9 @@ src/
     |                      result set).
     types.ts              -- CadenceResult, HourBucket (includes medianHeadway), Weekday,
     |                      Leg (includes routes: LegRoute[], tripCount?: number), LegRoute,
-    |                      Route, FindRoutesResult. tripCount is populated from pair_trip_counts
-    |                      by computeLegTripCounts() and used as a route-sort tiebreaker.
+    |                      Route, FindRoutesResult. tripCount is populated from the
+    |                      trip_count column on reachable_pairs by computeLegTripCounts()
+    |                      and used as a route-sort tiebreaker.
     utils.ts              -- cn() helper (clsx + tailwind-merge)
   sql/
     indexes.sql           -- All index CREATE statements
@@ -118,13 +119,16 @@ src/
       stops.ts            -- Post-ingest hook: populates stop_name_lower using JS toLowerCase()
                             (SQLite LOWER() is ASCII-only; this handles Æ, Ø, Å correctly)
     derived_tables/
-      reachable_pairs.sql  -- Precomputed distinct (board_id, alight_id) pairs: one row per
-      |                      stop pair where a single trip carries passengers from board to alight.
+      reachable_pairs.sql  -- Precomputed (board_id, alight_id, trip_count) rows: one row per
+      |                      stop pair where a single trip carries passengers from board to alight,
+      |                      plus the COUNT(DISTINCT trip_id) of trips serving that pair.
       |                      Primary key (board_id, alight_id); index on alight_id.
-      |                      Built at ingest (~50s for ~1.08M pairs). The BFS queries this
-      |                      table in ~50ms per wave instead of self-joining stop_times (~12s).
-      reachable_pairs.ts   -- Post-ingest hook: INSERT INTO reachable_pairs SELECT DISTINCT ...
-      |                      from stop_times self-join (with pickup_type=0, drop_off_type=0).
+      |                      Built at ingest (~50s for ~1.08M rows). The BFS queries this
+      |                      table in ~50ms per wave instead of self-joining stop_times (~12s);
+      |                      the post-BFS sort tiebreaker reads the trip_count column in ~ms
+      |                      per 250-pair batch.
+      reachable_pairs.ts   -- Post-ingest hook: GROUP BY (board_id, alight_id) over the stop_times
+      |                      self-join (pickup_type=0, drop_off_type=0), with COUNT(DISTINCT trip_id).
       reachable_pair_routes.sql -- Precomputed distinct (board_id, alight_id, route_short_name,
       |                      route_type) tuples: one row per stop pair + route that serves that
       |                      pair on some trip. Primary key (board_id, alight_id, route_short_name,
@@ -135,13 +139,6 @@ src/
       |                      ~18s total for 830 pairs — exceeds the 15s budget).
       reachable_pair_routes.ts -- Post-ingest hook: INSERT INTO reachable_pair_routes SELECT DISTINCT
       |                      from stop_times self-join + trips + routes.
-      pair_trip_counts.sql  -- Precomputed distinct (board_id, alight_id, trip_count) tuples: one
-      |                      row per reachable stop pair with COUNT(DISTINCT trip_id) of trips
-      |                      serving that pair (across all services/weekdays). Primary key
-      |                      (board_id, alight_id) serves as covering index. Built at ingest
-      |                      (~50s). computeLegTripCounts() queries this in ~ms per 250-pair batch.
-      pair_trip_counts.ts   -- Post-ingest hook: GROUP BY (board_id, alight_id) over the same
-                              stop_times self-join used for reachable_pairs, with COUNT(DISTINCT).
       service_dates.sql   -- Fully expanded active dates per service_id: one row per
       |                    (service_id, date YYYYMMDD, weekday 0=Mon..6=Sun).
       |                    Index on weekday. Built at ingest via TypeScript loop over calendar +
@@ -165,8 +162,9 @@ src/
                             leg pairs. Queries the precomputed reachable_pair_routes table. Used by
                             routing.ts after the BFS to populate Leg.routes for the coloured route
                             badges shown in route-list.tsx. Row-value IN clause, batched at 250 pairs.
-      pair_trip_counts.sql  -- Trip counts for a batch of (board_id, alight_id) pairs from the
-                              precomputed pair_trip_counts table. Row-value IN clause, batched at 250.
+      pair_trip_counts.sql  -- Trip counts for a batch of (board_id, alight_id) pairs read from
+                              the trip_count column of the precomputed reachable_pairs table.
+                              Row-value IN clause, batched at 250.
 ```
 
 ## Data Pipeline
@@ -387,7 +385,8 @@ The BFS stops as soon as `routes.length` reaches `MAX_RAW_ROUTES` (50,000) and r
 After the BFS (and after `computeLegRoutes()` populates `leg.routes`), routes are grouped by a canonical tuple key `(origin_name, ordered per-leg route-set, dest_name)` and collapsed to a single representative per tuple. The per-leg route-set is the sorted `route_short_name`s joined by `+` — so a leg served by both 206 and 350 buckets as `"206+350"`, not as separate tuples. The tuple ends are the specific stop names from `legs[0].fromName` / `legs[N-1].toName` (not the user's typed search names), so variants that board at different stops within the origin's 250m cluster stay distinct.
 
 Representative selection per tuple (priority order):
-1. **Highest min(tripCount) across legs** — `minTripCount(legs)` (computed from precomputed `pair_trip_counts`).
+1. **Highest min(tripCount) across legs** — `minTripCount(legs)` (computed from the
+   `trip_count` column on `reachable_pairs`).
    The bottleneck leg dominates so a route with one weak leg sinks even if other legs are busy.
 2. **Most stand-still transfers** — `legs[i].fromStopId === legs[i-1].toStopId` (no walk between trips).
 3. **Fewest visible name changes** — `routeNameKey(legs).split("|").length` (already collapses same-name walks).
@@ -405,7 +404,7 @@ After the BFS, `computeLegRoutes()` queries distinct `(route_short_name, route_t
 
 ### Per-leg trip counts (sort tiebreaker)
 
-After `computeLegRoutes()`, `computeLegTripCounts()` queries `pair_trip_counts.sql` for the same unique pairs, attaching `trip_count` (COUNT(DISTINCT trip_id) across all services/weekdays) to each `Leg.tripCount`. Same batching pattern (~ms per 250-pair batch via row-value IN clause against the covering PK). Used as the primary tiebreaker in route sorting (both per-tuple representative selection and final deduped sort): the route whose `min(leg.tripCount)` is highest ranks first within the same transfer count — the bottleneck leg dominates so a route with one weak leg sinks even if other legs are busy. If the time budget is exceeded mid-batch, legs keep `tripCount=undefined`, sort falls back to lex `routeNameKey` via the `?? 0` in `minTripCount()`, and `truncated=true` is set (reusing the same amber warning).
+After `computeLegRoutes()`, `computeLegTripCounts()` queries `pair_trip_counts.sql` for the same unique pairs, reading the `trip_count` column from the precomputed `reachable_pairs` table (`COUNT(DISTINCT trip_id)` across all services/weekdays, computed at ingest). Same batching pattern (~ms per 250-pair batch via row-value IN clause against the covering PK). The value is attached to each `Leg.tripCount`. Used as the primary tiebreaker in route sorting (both per-tuple representative selection and final deduped sort): the route whose `min(leg.tripCount)` is highest ranks first within the same transfer count — the bottleneck leg dominates so a route with one weak leg sinks even if other legs are busy. If the time budget is exceeded mid-batch, legs keep `tripCount=undefined`, sort falls back to lex `routeNameKey` via the `?? 0` in `minTripCount()`, and `truncated=true` is set (reusing the same amber warning).
 
 ### Per-leg cadence
 
