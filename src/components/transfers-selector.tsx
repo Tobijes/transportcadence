@@ -8,7 +8,7 @@ interface TransfersSelectorProps {
   disabled?: boolean;
 }
 
-const OPTIONS = [0, 1, 2, 3];
+const OPTIONS = [0, 1, 2];
 
 export function TransfersSelector({ value, onChange, disabled }: TransfersSelectorProps) {
   return (

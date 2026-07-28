@@ -253,7 +253,7 @@ Plus indexes created by derived-table definitions (notably `idx_reachable_pairs_
 - Between the two selectors: swaps `stopA` ↔ `stopB` and re-records both as recent.
 
 ### Transfers selector
-- 4-button group `0 1 2 3` (default: **1**). Label: "Skift" (Danish for "transfers/changes").
+- 3-button group `0 1 2` (default: **1**). Label: "Skift" (Danish for "transfers/changes").
 - Disabled while routes are loading.
 - Re-triggers the BFS on change.
 
@@ -374,7 +374,7 @@ Built at ingest time (~50s for ~1.08M distinct pairs). The BFS queries this tabl
 
 ### Time budget
 
-A 15-second wall-clock budget prevents server crashes on dense networks. If exceeded, the BFS returns partial results with `truncated: true`, and the UI shows an amber warning. Typical performance: max_transfers=0 (<100ms), max_transfers=1 (100ms-4s), max_transfers=2 (2-6s), max_transfers=3 (5-15s, may truncate).
+A 15-second wall-clock budget prevents server crashes on dense networks. If exceeded, the BFS returns partial results with `truncated: true`, and the UI shows an amber warning. Typical performance: max_transfers=0 (<100ms), max_transfers=1 (100ms-4s), max_transfers=2 (2-6s). Max UI option is 2 transfers.
 
 ### Route limit
 
