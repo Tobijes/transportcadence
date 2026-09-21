@@ -33,3 +33,29 @@ export type CadenceQueryResult = {
   cadence: CadenceResult;
   meta: QueryMeta;
 };
+
+export interface LegRoute {
+  shortName: string;
+  routeType: number;
+  meanTravelTime?: number; // fractional minutes; UI rounds up (ceiling) before display
+}
+
+export interface Leg {
+  fromStopId: string;
+  toStopId: string;
+  fromName: string;
+  toName: string;
+  routes: LegRoute[];
+  tripCount?: number;
+}
+
+export interface Route {
+  legs: Leg[];
+}
+
+export interface FindRoutesResult {
+  routes: Route[];
+  originName: string;
+  destName: string;
+  truncated: boolean;
+}
